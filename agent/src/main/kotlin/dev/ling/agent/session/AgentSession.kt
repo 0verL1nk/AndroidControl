@@ -8,6 +8,7 @@ import dev.ling.agent.engine.IEngineService
 import dev.ling.agent.launcher.ServerLauncher
 import dev.ling.agent.net.AgentProxy
 import dev.ling.agent.net.EngineStreams
+import dev.ling.agent.trust.PairingStore
 import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
@@ -89,8 +90,9 @@ class AgentSession(
         streams = engineStreams
         state("引擎已连入（video + control）")
 
-        val token = (100000..999999).random().toString()
-        val p = AgentProxy(engineStreams, token)
+        // 口令持久化：控制端一次绑定后即可"打开就连"，不需要每次输入
+        val token = PairingStore(context).token()
+        val p = AgentProxy(engineStreams, token, deviceName = agentDisplayName())
         proxy = p
         val (controlPort, videoPort) = p.start()
         state("已就绪")
@@ -131,6 +133,10 @@ class AgentSession(
     }
 
     fun engineOutput(): String = runCatching { engine?.recentOutput() ?: "" }.getOrDefault("")
+
+    /** 控制端在发现阶段看到的名字；长辈端部署时可用设置覆盖（M4）。 */
+    private fun agentDisplayName(): String =
+        android.os.Build.MODEL ?: "Android 设备"
 
     private fun state(message: String) {
         Log.i(TAG, message)

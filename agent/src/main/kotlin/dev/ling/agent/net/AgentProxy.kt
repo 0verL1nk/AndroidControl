@@ -18,6 +18,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class AgentProxy(
     private val streams: EngineStreams,
     private val token: String,
+    /** 设备展示名，用于控制端"自动发现"时列出可连设备。 */
+    private val deviceName: String = android.os.Build.MODEL ?: "Android 设备",
 ) {
 
     private val running = AtomicBoolean(false)
@@ -109,9 +111,32 @@ class AgentProxy(
         }
     }
 
-    /** 首行必须是 `<verb> <token>`；成功后回 OK，否则回 ERR 并断开。 */
+    /**
+     * 首个握手行有三种可能：
+     * - `PROBE`            → 控制端在扫描局域网，回一句设备描述即可（不需要口令）
+     * - `HELLO <token>`    → 建立控制会话
+     * - `AUTH <token>`     → 建立视频通道
+     *
+     * PROBE 只在隧道内可达，且只暴露设备名，用来实现"打开就能连、不用手输地址"。
+     */
     private fun authenticate(input: InputStream, output: OutputStream, verb: String): Boolean {
         val line = readLine(input) ?: return false
+        if (line.trim() == PROBE_VERB) {
+            output.write(discoveryReply().toByteArray(Charsets.UTF_8))
+            output.flush()
+            return false
+        }
+
+        // `FIND <口令哈希>`：控制端只输入一次 6 位口令，靠它自动找到"是哪一台"。
+        // 线上传的是哈希而非口令本身；隧道本身就是信任边界。
+        if (line.startsWith(FIND_PREFIX)) {
+            val claimed = line.removePrefix(FIND_PREFIX).trim()
+            if (claimed.equals(tokenHash(), ignoreCase = true)) {
+                output.write(discoveryReply().toByteArray(Charsets.UTF_8))
+                output.flush()
+            }
+            return false
+        }
         val parts = line.trim().split(' ')
         val ok = parts.size == 2 && parts[0] == verb && parts[1] == token
         output.write(if (ok) "OK\n".toByteArray() else "ERR\n".toByteArray())
@@ -119,6 +144,31 @@ class AgentProxy(
         if (!ok) Log.w(TAG, "鉴权失败：$line")
         return ok
     }
+
+    /**
+     * 发现响应：`AGENT k=v;k=v\n`。
+     *
+     * 带上名字/型号/系统版本是为了让控制端在"有多个长辈"时能分辨是哪一台；
+     * 只暴露这些无隐私含义的信息（不含屏幕内容、不含口令）。
+     */
+    private fun discoveryReply(): String {
+        val fields = listOf(
+            "agent=1",
+            "name=" + deviceName,
+            "model=" + (android.os.Build.MODEL ?: ""),
+            "brand=" + (android.os.Build.MANUFACTURER ?: ""),
+            "android=" + (android.os.Build.VERSION.RELEASE ?: ""),
+            "sdk=" + android.os.Build.VERSION.SDK_INT,
+            "control=" + controlPort,
+            "video=" + videoPort,
+        ).joinToString(";")
+        return "AGENT " + fields + "\n"
+    }
+
+    private fun tokenHash(): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(token.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     private fun pump(from: InputStream, to: OutputStream) {
         val buffer = ByteArray(64 * 1024)
@@ -153,5 +203,11 @@ class AgentProxy(
 
         /** 视频通道端口（隧道内固定）。 */
         const val VIDEO_PORT = 27186
+
+        /** 发现用握手词：只报告信息。 */
+        const val PROBE_VERB = "PROBE"
+
+        /** 按口令找设备：`FIND <sha256(口令)>`。 */
+        const val FIND_PREFIX = "FIND "
     }
 }
