@@ -1,0 +1,5 @@
+#!/bin/sh
+# 提交前检查：仓库里不得出现使用者的个人信息。
+# 由 tools/install-hooks.sh 通过 core.hooksPath 启用。
+root=$(git rev-parse --show-toplevel) || exit 1
+exec bash "$root/tools/check-personal-data.sh" --staged

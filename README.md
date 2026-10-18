@@ -81,6 +81,14 @@ cd controller && ./gradlew assembleDebug && adb install app-debug.apk
 
 路线图与决策记录见 `docs/ROADMAP.md`、`docs/DECISIONS.md`。
 
+## 参与开发
+
+```bash
+bash tools/install-hooks.sh   # 克隆后跑一次：启用提交前个人信息检查
+```
+
+详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 项目结构
 
 ```text
