@@ -43,7 +43,9 @@ description: "Task list for 远程接管 Android 手机（跨公网 M1）"
 
 **⚠️ 关键**：T009 是本项目最大的技术风险，必须最先验证。
 
-- [ ] T009 **Shizuku 启动引擎验证**（探针）：在 `agent/` 中实现最小 Shizuku `UserService`，以 shell 身份执行 `CLASSPATH=… app_process … com.genymobile.scrcpy.Server 5.0.1 …`，确认 server 能连上 App 创建的 abstract socket
+- [x] T009 **Shizuku 启动引擎验证**（探针）：在 `agent/` 中实现最小 Shizuku `UserService`，以 shell 身份执行 `CLASSPATH=… app_process … com.genymobile.scrcpy.Server 5.0.1 …`，确认 server 能连上 App 创建的 abstract socket
+  - **结论（2026-10-19）**：通过。UserService 进程为 `uid=2000(shell)`、SELinux `u:r:shell:s0`，成功读取 `/data/local/tmp/scrcpy-server.jar` 并拉起 server（日志 `[server] INFO: Device: [Xiaomi] Redmi 23078RKD5C (Android 16)`，exit=124 表示持续运行）。
+  - **重要发现**：Shizuku **13.6.0 在联发科机型上 UserService 崩溃**（`LoadedApk.makeApplicationInner` NPE，上游 issue #1198/#1171），**13.5.4 正常**。见 ADR-014。
 - [ ] T010 [P] `protocol/ProtocolConstants.kt`：协议版本、消息类型枚举（INJECT_KEYCODE=0 … RESET_VIDEO=17）、按键码
 - [ ] T011 [P] `protocol/ByteReader.kt` + 单测：大端读取工具
 - [ ] T012 [P] `protocol/VideoDemuxer.kt` + 单测：解析 64 字节设备名、codec id、session/media 包（12 字节包头）

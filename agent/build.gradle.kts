@@ -8,12 +8,13 @@ plugins {
 
 android {
     namespace = "dev.ling.agent"
-    compileSdk = 36
+    // androidx.core 1.19.1 要求 compileSdk ≥ 37
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "dev.ling.agent"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
     }
@@ -22,6 +23,13 @@ android {
         release {
             isMinifyEnabled = false
         }
+    }
+
+    // UserService 需要跨进程接口
+    buildFeatures {
+        aidl = true
+        // AGP 8 起 BuildConfig 默认不生成，这里显式打开（探针里用 BuildConfig.DEBUG）
+        buildConfig = true
     }
 
     compileOptions {

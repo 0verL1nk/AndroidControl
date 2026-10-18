@@ -158,3 +158,53 @@ shell uid 2000，`ro.debuggable=0`。
 3. 打洞优化（避免流量全走节点）——M3。
 4. fork 上游后续更新的合并成本。
 5. 手机蜂窝网络对 UDP 51820 的放行情况（部分运营商对非标准 UDP 端口限速）。
+
+## R11. T009 结论：Shizuku 以 shell 身份拉起引擎【实测 2026-10-19】
+
+**结论：可行，且已在真机跑通。**
+
+探针（`agent` 的 `ShizukuProbeService`，一个 Shizuku UserService）在
+Redmi K60 Ultra / Android 16 上输出：
+
+```
+[UserService 进程身份]  uid=2000(shell) ... context=u:r:shell:s0
+[引擎文件可见]          /data/local/tmp/scrcpy-server.jar 733930 字节
+[启动引擎]              exit=124（被 timeout 掐断，说明一直在运行）
+                        [server] INFO: Device: [Xiaomi] Redmi 23078RKD5C (Android 16)
+[进程列表]              shell  7322  dev.ling.agent:probe
+```
+
+这证明了整条架构最关键的一环：**不 root、由 Shizuku 提供 shell 身份、以 `app_process`
+拉起 scrcpy-server，全部成立。**
+
+### 途中发现的致命兼容性问题：Shizuku 13.6.0 在联发科机型上不可用
+
+首次用 Shizuku **13.6.0** 时 UserService 启动失败：
+
+```
+W ShizukuServiceStarter: unable to start service dev.ling.agent/dev.ling.agent.ShizukuProbeService...
+Caused by: java.lang.NullPointerException: Attempt to invoke virtual method
+           'boolean java.lang.Object.equals(java.lang.Object)' on a null object reference
+    at android.app.LoadedApk.makeApplicationInner(LoadedApk.java:1605)
+```
+
+这是**已知上游缺陷**，非本项目代码问题：
+
+- RikkaApps/Shizuku#1198「User services don't work on MediaTek devices」——堆栈完全一致；
+  作者 vvb2060 定位为**联发科机型**的框架改动，加上 Shizuku 启动 UserService 时未经过
+  `ActivityThread#bindApplication`，导致 `Application.getProcessName()` 为 null 时 NPE。
+- RikkaApps/Shizuku#1171 指出成因与 Shizuku-API PR #80（网络安全配置处理）有关，
+  该改动进入了 13.6.0。
+- 社区反馈：**13.5.4 正常、13.6.0 坏**。
+
+**处理：改装 Shizuku 13.5.4，UserService 立即正常。** 已在文档中固定该版本，并把
+"目标机型上必须实测 Shizuku 版本"列为部署前的硬性检查。
+
+**影响面**：长辈端手机若是联发科芯片（K60 Ultra、多数天玑机型），必须用 13.5.x；
+高通机型上 13.6.0 可能正常，但仍建议统一用 13.5.4 以避免行为不一致。
+
+### 仍未解决
+
+- **重启后 Shizuku 不会自动运行**——13.5.4 界面明确提示"每次设备重新启动后需要重新进行"。
+  这是"长辈零操作"的下一个关卡（M2）：候选方案是保持无线调试常开，由 Shizuku 的
+  "可信 WLAN 自启"接管；需在本 ROM 上实测。

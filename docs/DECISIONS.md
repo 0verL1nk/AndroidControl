@@ -4,6 +4,34 @@
 
 ---
 
+## ADR-014：固定使用 Shizuku 13.5.4（13.6.0 在联发科机型上不可用）
+
+**日期**：2026-10-19
+**状态**：已采纳
+
+**决策**：长辈端要求安装 **Shizuku 13.5.4**，不使用 13.6.0；部署前必须在目标机型上
+实测 UserService 能否启动。
+
+**理由**：实测发现 Shizuku 13.6.0 的 UserService 在**联发科机型**上启动即崩：
+
+```
+Caused by: NullPointerException at android.app.LoadedApk.makeApplicationInner
+```
+
+这是上游已知缺陷（RikkaApps/Shizuku#1198、#1171，与 Shizuku-API PR #80 有关），
+并非本项目代码问题。换装 13.5.4 后立刻正常，探针完整跑通（uid=2000 shell、
+app_process 拉起 scrcpy-server 成功）。测试机 Redmi K60 Ultra 为天玑 9200+。
+
+**放弃的备选**：
+- 用 13.6.0 并规避：无可行规避手段，崩溃发生在应用代码执行之前。
+- 放弃 UserService 改用其它机制：Shizuku 公开 API 中 `newProcess` 已移除，
+  UserService 是唯一正路。
+
+**影响**：
+- 部署手册必须写明版本要求与校验方法。
+- 上游修复后可重新评估；重新评估前不改版本。
+- 这条约束同时是"机型白名单"的一部分：联发科 + 新系统的机型必须实测。
+
 ## ADR-013：仓库不留任何个人与环境信息
 
 **日期**：2026-10-18
