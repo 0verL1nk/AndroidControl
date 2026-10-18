@@ -1,0 +1,17 @@
+AndroidControl
+Copyright 2026 The AndroidControl Authors
+
+This product includes software developed as part of the scrcpy project
+(https://github.com/Genymobile/scrcpy), licensed under the Apache License 2.0.
+Copyright (C) 2018 Genymobile.
+
+This product includes a modified version of Scrcpy for Android
+(https://github.com/Miuzarte/ScrcpyForAndroid), licensed under the
+Apache License 2.0.
+The modified sources are located in the `controller/` directory and retain
+their original license and copyright notices.
+
+This product interacts with Shizuku
+(https://github.com/RikkaApps/Shizuku) to obtain shell privileges on
+non-rooted devices. Shizuku is licensed under the Apache License 2.0 and is
+distributed separately by its authors; it is not bundled with this project.
