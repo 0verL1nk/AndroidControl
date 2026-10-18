@@ -1,2 +1,21 @@
-# 本地机密：隧道私钥、配置、二维码
+# 本地机密：隧道私钥、对端配置、二维码、实例信息
 .secrets/
+
+# Gradle / Android 构建产物
+.gradle/
+build/
+*/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.hprof
+
+# 系统
+.DS_Store
+Thumbs.db
