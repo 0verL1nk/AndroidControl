@@ -36,7 +36,7 @@
 
         <!-- 以 shell 身份运行的 UserService（由 Shizuku 启动，不随本应用常驻） -->
         <service
-            android:name=".ShizukuProbeService"
+            android:name="dev.ling.agent.engine.EngineService"
             android:exported="false" />
 
     </application>

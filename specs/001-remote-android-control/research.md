@@ -208,3 +208,39 @@ Caused by: java.lang.NullPointerException: Attempt to invoke virtual method
 - **重启后 Shizuku 不会自动运行**——13.5.4 界面明确提示"每次设备重新启动后需要重新进行"。
   这是"长辈零操作"的下一个关卡（M2）：候选方案是保持无线调试常开，由 Shizuku 的
   "可信 WLAN 自启"接管；需在本 ROM 上实测。
+
+## R12. 长辈端闭环打通【实测 2026-10-19】
+
+在真机（Redmi K60 Ultra / Android 16）上，纯设备内、不依赖 PC 的完整链路已跑通：
+
+```
+打开 App → 释放引擎 → shell 侧建 socket → Shizuku 以 shell 身份拉起 scrcpy-server
+        → 接受 video/control 两条流（fd 经 Binder 传回）→ 在 27185/27186 暴露给控制端
+```
+
+实测结果：
+
+| 验证项 | 结果 |
+|---|---|
+| UserService 身份 | `uid=2000(shell)`、`u:r:shell:s0` |
+| 引擎启动 | `[server] INFO: Device: [Xiaomi] Redmi 23078RKD5C (Android 16)` |
+| 视频通道 | 设备名 `23078RKD5C`、编码 `h264`、会话包尺寸 `320x720`（max_size=720，比例正确） |
+| 控制通道 | 握手 + 注入滑动后**截图哈希改变**（`eb264147…` → `cc335da2…`）→ 注入真实生效 |
+
+### 途中发现的三个坑（都已修复，写入契约文档）
+
+1. **SELinux 跨域**：shell 进程**不能**连接应用创建的抽象 socket（`Permission denied`）。
+   解法：由 shell 侧的 UserService 建 socket 并接受引擎连接，再用 Binder 把 **fd**
+   交给应用。这是本方案能成立的关键一步。
+2. **`scid` 是十六进制**：scrcpy 用 `Integer.parseInt(v, 16)` 解析，传十进制直接崩。
+3. **流头会丢**：引擎在应用启动最初几十毫秒就发出「设备名 + 编码 id + 会话包 + 配置包」，
+   此时通常还没有控制端连进来。必须缓存并在客户端接入时回放，否则后接入的客户端
+   只能拿到裸 H.264，解不出画面。这一条同时解决了"断线重连恢复画面"。
+
+另：`LocalSocket` 对象若被 GC 回收会 shutdown 底层 socket，把 fd dup 出去的同时
+必须**持住原 socket 引用**直到会话结束。
+
+### 结论
+
+架构上最关键的不确定性（免 root 拿 shell、跨域传流、协议对接、注入生效）已全部消除。
+剩下的都是常规工程量：控制端 App、适配 UI、保活与自启、公网稳定性。

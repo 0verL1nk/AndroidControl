@@ -25,6 +25,11 @@ android {
         }
     }
 
+    // 引擎 jar 不做压缩：assets.openFd 要求未压缩，且避免每次释放时解压
+    androidResources {
+        noCompress += listOf("jar")
+    }
+
     // UserService 需要跨进程接口
     buildFeatures {
         aidl = true
