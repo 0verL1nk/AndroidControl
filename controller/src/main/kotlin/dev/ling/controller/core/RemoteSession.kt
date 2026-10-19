@@ -105,8 +105,12 @@ class RemoteSession(
 
         val link = ControlLink(device)
         control = link
-        // 每次控制流（重新）连上都补一个关键帧请求：后连入的客户端需要新的 IDR 才能出画
-        link.onConnected = { link.requestKeyFrame() }
+        // 每次控制流（重新）连上：先确保对方屏幕亮着，再补一个关键帧请求
+        // （后连入的客户端需要新的 IDR 才能出画）
+        link.onConnected = {
+            link.wakeScreen()
+            link.requestKeyFrame()
+        }
         link.start()
 
         val videoDecoder = VideoDecoder(video.getInputStream(), surface)
@@ -191,7 +195,13 @@ class RemoteSession(
 
     private companion object {
         const val TAG = "RemoteSession"
-        const val MAX_ATTEMPTS = 15
+
+        /**
+         * 重试次数。单次失败很快（中继不可达时 200ms 就返回），
+         * 60 次 ≈ 30 秒以上，足够覆盖"长辈端 App 重启/引擎重启"这种十几秒的空窗；
+         * 再长就没有意义了——真断网时应该让用户看到明确失败，而不是无限转圈。
+         */
+        const val MAX_ATTEMPTS = 60
         const val RECONNECT_DELAY_MS = 500L
         const val STATS_INTERVAL_MS = 1_000L
         const val RTT_TIMEOUT_MS = 400

@@ -5,12 +5,28 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 语音对讲期间需要麦克风；后台录音必须声明 microphone 类型 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 双向语音：把长辈的麦克风声音传给家人 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 被协助时的屏幕荧光提示：需要"显示在其他应用上层" -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
+    <!--
+        Android 11+ 的包可见性：敏感页面提示需要把包名翻译成应用名给长辈看，
+        这里声明只能看到"有启动图标的应用"——足够覆盖支付/银行类 App，
+        比 QUERY_ALL_PACKAGES（可见所有应用）克制得多。
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="false"
@@ -53,7 +69,7 @@
         <service
             android:name=".AgentService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|microphone">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="保持远程协助会话在线" />

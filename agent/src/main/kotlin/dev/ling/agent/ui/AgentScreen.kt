@@ -79,6 +79,7 @@ fun AgentScreen(
     onStop: () -> Unit,
     onRetry: () -> Unit,
     onOpenShizuku: () -> Unit = {},
+    onRotateToken: () -> Unit = {},
 ) {
     var tapCount by remember { mutableIntStateOf(0) }
     var showAdvanced by remember { mutableStateOf(false) }
@@ -177,7 +178,7 @@ fun AgentScreen(
     }
 
     if (showAdvanced) {
-        AdvancedDialog(state) { showAdvanced = false }
+        AdvancedDialog(state, onRotateToken) { showAdvanced = false }
     }
 }
 
@@ -306,7 +307,11 @@ private fun PrimaryAction(
 }
 
 @Composable
-private fun AdvancedDialog(state: AgentUiState, onDismiss: () -> Unit) {
+private fun AdvancedDialog(
+    state: AgentUiState,
+    onRotateToken: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val info = state.info
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -317,6 +322,10 @@ private fun AdvancedDialog(state: AgentUiState, onDismiss: () -> Unit) {
                 Text("配对码：${info?.token ?: "—"}", fontSize = 15.sp)
                 Text("控制端口：${info?.controlPort ?: "—"} / 视频：${info?.videoPort ?: "—"}", fontSize = 15.sp)
                 Text("会话号：${info?.scid ?: "—"}", fontSize = 15.sp)
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onRotateToken) {
+                    Text("重新生成配对码（旧码立即失效）", fontSize = 15.sp)
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭", fontSize = 17.sp) } },

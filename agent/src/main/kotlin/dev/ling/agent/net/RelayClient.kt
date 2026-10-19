@@ -33,6 +33,24 @@ class RelayClient(
     private val running = AtomicBoolean(false)
     private var signalingThread: Thread? = null
 
+    /** 信令通道的输出流：PING 与求助共用，写操作必须串行（否则两行会粘在一起）。 */
+    @Volatile
+    private var signalingOut: java.io.OutputStream? = null
+
+    /** 信令刚建立时回调（每次重连都会调）；由上层决定是否需要做什么。 */
+    var onSignalingReady: (() -> Unit)? = null
+
+    /** 告诉中继"长辈按了求助"，供控制端下次打开时查询。 */
+    fun sendHelp() {
+        val out = signalingOut ?: return
+        synchronized(out) {
+            runCatching {
+                out.write("HELP\n".toByteArray())
+                out.flush()
+            }
+        }
+    }
+
     fun start() {
         if (!running.compareAndSet(false, true)) return
         signalingThread = Thread({ signalingLoop() }, "relay-signaling")
@@ -65,23 +83,27 @@ class RelayClient(
             node.keepAlive = true
             node.soTimeout = HANDSHAKE_TIMEOUT_MS
 
-            node.getOutputStream().apply {
-                write("AGENT $tokenHash signaling\n".toByteArray())
-                flush()
-            }
+            val out = node.getOutputStream()
+            out.write("AGENT $tokenHash signaling\n".toByteArray())
+            out.flush()
             if (readLine(node.getInputStream()) != "OK") {
                 throw IllegalStateException("节点拒绝了信令连接")
             }
+            signalingOut = out
 
             onState("隧道已建立，等待家人连接")
             Log.i(TAG, "信令已连接")
+            onSignalingReady?.invoke()
 
             // 心跳：既是保活，也是"对方还在不在"的探针
             val pinger = Thread({
                 while (running.get()) {
                     try {
                         Thread.sleep(PING_INTERVAL_MS)
-                        node.getOutputStream().apply { write("PING\n".toByteArray()); flush() }
+                        synchronized(out) {
+                            out.write("PING\n".toByteArray())
+                            out.flush()
+                        }
                     } catch (t: Throwable) {
                         return@Thread
                     }
@@ -109,6 +131,7 @@ class RelayClient(
                 }
             } finally {
                 pinger.interrupt()
+                signalingOut = null
             }
         }
         onState("隧道断开，正在重连…")
@@ -116,8 +139,12 @@ class RelayClient(
 
     /** 按需开一条数据连接，并与本机代理对接。 */
     private fun openDataConnection(role: String) {
-        val localPort = if (role == "control") localControlPort else localVideoPort
-        val localVerb = if (role == "control") "HELLO" else "AUTH"
+        // 语音与控制在同一端口上、用不同动词区分；视频单独一个端口
+        val (localPort, localVerb) = when (role) {
+            "control" -> localControlPort to "HELLO"
+            "audio" -> localControlPort to "AUDIO"
+            else -> localVideoPort to "AUTH"
+        }
         try {
             Socket().use { relay ->
                 relay.connect(InetSocketAddress(nodeHost, nodePort), DATA_CONNECT_TIMEOUT_MS)
@@ -202,7 +229,7 @@ class RelayClient(
 
     private companion object {
         const val TAG = "RelayClient"
-        val ROLES = setOf("control", "video")
+        val ROLES = setOf("control", "video", "audio")
 
         const val CONNECT_TIMEOUT_MS = 5_000
         const val HANDSHAKE_TIMEOUT_MS = 8_000

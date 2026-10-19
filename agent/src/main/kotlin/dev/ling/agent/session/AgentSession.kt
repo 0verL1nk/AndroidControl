@@ -10,6 +10,7 @@ import dev.ling.agent.net.AgentProxy
 import dev.ling.agent.net.EngineStreams
 import dev.ling.agent.net.RelayClient
 import dev.ling.agent.trust.PairingStore
+import dev.ling.agent.trust.SensitiveApps
 import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
@@ -30,6 +31,8 @@ class AgentSession(
     private val onState: (String) -> Unit,
     private val onReady: (SessionInfo) -> Unit,
     private val onPhase: (AssistPhase, String) -> Unit = { _, _ -> },
+    /** 进入/离开敏感页面（支付、银行）时回调；null 表示已离开。 */
+    private val onSensitivePage: ((String?) -> Unit)? = null,
 ) {
 
     private var proxy: AgentProxy? = null
@@ -118,13 +121,16 @@ class AgentSession(
         onPhase(AssistPhase.Ready, "已准备好，等待家人连接")
         onReady(SessionInfo(controlPort, videoPort, token, scidHex))
 
+        Thread({ monitorSensitivePages(service, p) }, "sensitive-pages")
+            .apply { isDaemon = true; start() }
+
         // 配了中继就主动连出去：这样两台手机都不需要任何入站可达性，
         // 长辈手机上也不用再装 VPN
         val store = PairingStore(context)
         val relayHost = store.relayHost()
         if (!relayHost.isNullOrBlank()) {
             state("连接中继节点 $relayHost…")
-            relay = RelayClient(
+            val client = RelayClient(
                 nodeHost = relayHost,
                 nodePort = store.relayPort(),
                 token = token,
@@ -138,7 +144,15 @@ class AgentSession(
                         if (connected) "正在被协助" else "已准备好，等待家人连接",
                     )
                 },
-            ).also { it.start() }
+            )
+            // 长辈按下"开启协助"就是一次求助：只在本次会话的第一次连上时上报，
+            // 后续的重连不代表长辈又按了一次。
+            val helpAnnounced = AtomicBoolean(false)
+            client.onSignalingReady = {
+                if (helpAnnounced.compareAndSet(false, true)) client.sendHelp()
+            }
+            relay = client
+            client.start()
         }
     }
 
@@ -192,6 +206,40 @@ class AgentSession(
         else -> "出了点问题，请让家人看看"
     }
 
+    /**
+     * 敏感页面提示：只在有人正在看时轮询，避免无人协助时也一直跑 shell。
+     * 命中支付/银行类应用就通知界面切成红色提示；离开后恢复。
+     */
+    private fun monitorSensitivePages(service: IEngineService, proxy: AgentProxy) {
+        var reported: String? = null
+        while (started.get()) {
+            try {
+                Thread.sleep(SENSITIVE_POLL_MS)
+            } catch (_: InterruptedException) {
+                return
+            }
+            try {
+                if (!proxy.hasController) {
+                    if (reported != null) {
+                        reported = null
+                        onSensitivePage?.invoke(null)
+                    }
+                    continue
+                }
+                val packageName = runCatching { service.foregroundPackage() }.getOrDefault("")
+                val sensitive = packageName.takeIf { SensitiveApps.matches(it) }
+                Log.i(TAG, "前台应用：${packageName.ifEmpty { "?" }}（敏感=${sensitive != null}）")
+                if (sensitive != reported) {
+                    reported = sensitive
+                    onSensitivePage?.invoke(sensitive)
+                }
+            } catch (t: Throwable) {
+                // 轮询只是辅助功能：任何失败都不该把线程打死，下一轮继续
+                Log.w(TAG, "敏感页面轮询失败：${t.message}")
+            }
+        }
+    }
+
     private fun state(message: String) {
         Log.i(TAG, message)
         onState(message)
@@ -207,5 +255,8 @@ class AgentSession(
 
     private companion object {
         const val TAG = "AgentSession"
+
+        /** 敏感页面轮询间隔：3 秒足够及时，又不会让 dumpsys 成为负担。 */
+        const val SENSITIVE_POLL_MS = 3_000L
     }
 }
