@@ -110,7 +110,20 @@ def main() -> int:
         token_hash = hashlib.sha256(args.token.encode()).hexdigest()
 
         print(f"→ 通过中继 {relay_host}:{relay_port} 查找设备")
-        control = connect(relay_host, relay_port, f"FIND {token_hash}", "control")
+        # 长辈端在会话结束后会重新登记（几十秒一次心跳），这期间中继可能暂时找不到它。
+        # 真实控制端会自动重试，这里保持一致，避免探针"一次不成就报错"。
+        control = None
+        for attempt in range(1, 13):
+            try:
+                control = connect(relay_host, relay_port, f"FIND {token_hash}", "control")
+                break
+            except RuntimeError as exc:
+                if "ERR" not in str(exc):
+                    raise
+                print(f"  第 {attempt} 次没找到设备，2 秒后重试…")
+                time.sleep(2)
+        if control is None:
+            raise RuntimeError("中继上始终没有找到这台设备（长辈端可能没在运行）")
         print("  控制通道已配对")
         video = connect(relay_host, relay_port, f"FIND {token_hash}", "video")
         print("  视频通道已配对")

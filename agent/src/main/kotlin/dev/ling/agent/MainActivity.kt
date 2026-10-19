@@ -85,7 +85,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startAssist() = AgentService.start(this)
+    private fun startAssist() {
+        requestOverlayIfNeeded()
+        AgentService.start(this)
+    }
+
+    /**
+     * 荧光提示需要"显示在其他应用上层"权限。没有它协助照样能用，
+     * 只是长辈看不到那圈提示——所以这里请求一次，但不拦路。
+     */
+    private fun requestOverlayIfNeeded() {
+        if (android.provider.Settings.canDrawOverlays(this)) return
+        runCatching {
+            startActivity(
+                android.content.Intent(
+                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:$packageName"),
+                )
+            )
+        }.onFailure { android.util.Log.w("AgentMain", "无法打开悬浮窗授权页", it) }
+    }
 
     /**
      * 跳到 Shizuku 让它自己启动。

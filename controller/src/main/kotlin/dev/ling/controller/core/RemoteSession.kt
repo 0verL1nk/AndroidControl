@@ -19,7 +19,7 @@ class RemoteSession(
     interface Listener {
         fun onConnected(frameWidth: Int, frameHeight: Int)
         fun onSizeChanged(frameWidth: Int, frameHeight: Int)
-        fun onStats(fps: Double, kbps: Double, rttMs: Long)
+        fun onStats(fps: Double, kbps: Double, rttMs: Long, idleSeconds: Int)
         fun onReconnecting(attempt: Int, max: Int)
         fun onFailed(reason: String)
         /** 长辈端主动结束（对方点了"结束协助"）。这种不该自动重连。 */
@@ -129,20 +129,27 @@ class RemoteSession(
         var lastFrames = 0L
         var lastBytes = 0L
         var lastAt = System.currentTimeMillis()
+        var lastFrameAt = System.currentTimeMillis()
         while (running.get()) {
             Thread.sleep(STATS_INTERVAL_MS)
             val now = System.currentTimeMillis()
             val elapsed = (now - lastAt).coerceAtLeast(1)
             val fps = (decoder.frameCount - lastFrames) * 1000.0 / elapsed
             val kbps = (decoder.bytesReceived - lastBytes) * 8.0 / elapsed
+            // 画面静止时引擎本来就不发帧，这是正常的；
+            // 但如果长时间一帧都没有，界面要如实说明，而不是让人以为卡死。
+            if (decoder.frameCount != lastFrames) {
+                lastFrameAt = now
+            }
             lastFrames = decoder.frameCount
             lastBytes = decoder.bytesReceived
             lastAt = now
+            val idleSeconds = ((now - lastFrameAt) / 1000).toInt()
 
             if (frameWidth > 0 && frameHeight > 0) {
                 listener.onConnected(frameWidth, frameHeight)
             }
-            listener.onStats(fps, kbps, measureRtt())
+            listener.onStats(fps, kbps, measureRtt(), idleSeconds)
         }
     }
 
@@ -165,7 +172,7 @@ class RemoteSession(
     private companion object {
         const val TAG = "RemoteSession"
         const val MAX_ATTEMPTS = 15
-        const val RECONNECT_DELAY_MS = 1_200L
+        const val RECONNECT_DELAY_MS = 500L
         const val STATS_INTERVAL_MS = 1_000L
         const val RTT_TIMEOUT_MS = 400
         const val ControlMessageWriterPointer = -2L

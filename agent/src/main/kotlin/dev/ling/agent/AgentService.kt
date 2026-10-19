@@ -13,6 +13,7 @@ import dev.ling.agent.launcher.ShizukuLauncher
 import dev.ling.agent.session.AgentSession
 import dev.ling.agent.session.AgentUiState
 import dev.ling.agent.session.AssistPhase
+import dev.ling.agent.ui.ControlIndicator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,11 +30,13 @@ import kotlinx.coroutines.flow.asStateFlow
 class AgentService : Service() {
 
     private var session: AgentSession? = null
+    private var indicator: ControlIndicator? = null
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
         startForeground(NOTIFICATION_ID, buildNotification("正在准备协助…"))
+        indicator = ControlIndicator(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -53,6 +56,10 @@ class AgentService : Service() {
 
     override fun onDestroy() {
         stopSession()
+        mainHandler.post {
+            indicator?.hide()
+            indicator = null
+        }
         super.onDestroy()
     }
 
@@ -83,6 +90,12 @@ class AgentService : Service() {
                     info = INFO,
                 )
                 notify(buildNotification(if (phase == AssistPhase.Active) "正在被协助" else message))
+                // 被协助时给屏幕加一圈荧光：这是长辈"看得见"的边界，结束即消失。
+                // 注意：添加窗口必须在主线程（回调发生在网络线程，直接加会抛
+                // "Can't create handler ... Looper.prepare()"）。
+                mainHandler.post {
+                    if (phase == AssistPhase.Active) indicator?.show() else indicator?.hide()
+                }
             },
         )
         session = created
@@ -90,16 +103,25 @@ class AgentService : Service() {
     }
 
     private fun stopSession() {
+        indicator?.hide()
         session?.stop()
         session = null
         STATE = "已结束协助"
         _state.value = AgentUiState(phase = AssistPhase.Idle, detail = "已结束协助")
     }
 
+    /**
+     * 通知更新走主线程：它是一次跨进程调用，直接在网络线程里调用有可能把线程卡住
+     * （实测中继线程就这样无声地停住过）。网络线程只负责投递。
+     */
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     private fun notify(notification: Notification) {
-        runCatching {
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-                .notify(NOTIFICATION_ID, notification)
+        mainHandler.post {
+            runCatching {
+                (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                    .notify(NOTIFICATION_ID, notification)
+            }
         }
     }
 

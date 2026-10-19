@@ -44,6 +44,7 @@ data class SessionStats(
     val fps: Double = 0.0,
     val kbps: Double = 0.0,
     val rttMs: Long = -1,
+    val idleSeconds: Int = 0,
     val reconnecting: Int? = null,
     val failure: String? = null,
 )
@@ -73,8 +74,8 @@ fun ControlScreen(
 
             override fun onSizeChanged(frameWidth: Int, frameHeight: Int) = Unit
 
-            override fun onStats(fps: Double, kbps: Double, rttMs: Long) {
-                stats = stats.copy(fps = fps, kbps = kbps, rttMs = rttMs)
+            override fun onStats(fps: Double, kbps: Double, rttMs: Long, idleSeconds: Int) {
+                stats = stats.copy(fps = fps, kbps = kbps, rttMs = rttMs, idleSeconds = idleSeconds)
             }
 
             override fun onReconnecting(attempt: Int, max: Int) {
@@ -180,6 +181,9 @@ fun ControlScreen(
                     HudLine("码率 " + mbpsLabel(stats.kbps))
                     HudLine("网络 " + rttShort(stats.rttMs))
                     HudLine(qualityLabel(stats.rttMs))
+                    if (stats.idleSeconds >= 5) {
+                        HudLine("画面 ${stats.idleSeconds}s 未更新")
+                    }
                 }
             }
         }
