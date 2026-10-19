@@ -34,6 +34,17 @@
             android:multiprocess="false"
             android:permission="android.permission.INTERNET" />
 
+        <!-- 开机后自动恢复"可被协助"状态 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <!-- 常驻前台服务：会话期间防止被系统冻结，并让长辈端状态始终可见 -->
         <service
             android:name=".AgentService"
