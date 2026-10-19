@@ -147,7 +147,7 @@ class RelayClient(
                     Log.i(TAG, "$role 数据流已建立")
                     relay.soTimeout = 0
                     local.soTimeout = 0
-                    pumpBothWays(relay, local)
+                    pumpBothWays(relay, local, role)
                     onState("家人已断开（$role）")
                 }
             }
@@ -156,10 +156,10 @@ class RelayClient(
         }
     }
 
-    private fun pumpBothWays(a: Socket, b: Socket) {
-        val up = Thread({ pump(a.getInputStream(), b.getOutputStream()) }, "relay-up")
+    private fun pumpBothWays(a: Socket, b: Socket, role: String) {
+        val up = Thread({ pump("$role 上行", a.getInputStream(), b.getOutputStream()) }, "relay-up")
             .apply { isDaemon = true; start() }
-        pump(b.getInputStream(), a.getOutputStream())
+        pump("$role 下行", b.getInputStream(), a.getOutputStream())
         // 任一方向结束就关掉两端：否则另一个方向会一直阻塞在读上，
         // 会话结束后既不会退出也不会重新登记（实测踩到过）。
         runCatching { a.close() }
@@ -167,17 +167,20 @@ class RelayClient(
         up.interrupt()
     }
 
-    private fun pump(from: InputStream, to: OutputStream) {
+    private fun pump(label: String, from: InputStream, to: OutputStream) {
         val buffer = ByteArray(64 * 1024)
         try {
             while (running.get()) {
                 val n = from.read(buffer)
-                if (n < 0) break
+                if (n < 0) {
+                    Log.i(TAG, "$label 对端正常关闭")
+                    break
+                }
                 to.write(buffer, 0, n)
                 to.flush()
             }
         } catch (t: Throwable) {
-            Log.i(TAG, "转发结束：${t.message}")
+            Log.i(TAG, "$label 异常结束：${t.message}")
         }
     }
 
@@ -205,8 +208,8 @@ class RelayClient(
         const val HANDSHAKE_TIMEOUT_MS = 8_000
 
         /** 数据连接是"有人在等"的，必须快：超时就意味着这次连接失败。 */
-        const val DATA_CONNECT_TIMEOUT_MS = 3_000
-        const val DATA_HANDSHAKE_TIMEOUT_MS = 3_000
+        const val DATA_CONNECT_TIMEOUT_MS = 10_000
+        const val DATA_HANDSHAKE_TIMEOUT_MS = 6_000
 
         const val PING_INTERVAL_MS = 10_000L
         const val SIGNALING_TIMEOUT_MS = 35_000

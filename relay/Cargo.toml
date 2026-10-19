@@ -1,0 +1,29 @@
+[package]
+name = "ac-relay"
+version = "2.0.1"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+description = "配对中继：让两台处于 NAT 后面的手机建立连接（远程协助节点）"
+repository = "https://github.com/0verL1nk/AndroidControl"
+publish = false
+
+[lib]
+name = "ac_relay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ac-relay"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+socket2 = { version = "0.5", features = ["all"] }
+
+[profile.release]
+# 节点上只跑一个二进制：体积换启动速度没有意义，压小一点省磁盘
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

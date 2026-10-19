@@ -43,7 +43,15 @@ class AgentSession(
 
     data class SessionInfo(val controlPort: Int, val videoPort: Int, val token: String, val scid: String)
 
-    fun start(maxSize: Int = 720, maxFps: Int = 30, bitRate: Int = 2_000_000) {
+    /**
+     * 引擎的画面参数。
+     *
+     * scrcpy 的 `max_size` 约束的是**长边**：1280 在 20:9 的手机上约等于 576×1280，
+     * 缩到控制端屏幕上文字仍然清楚；720 会糊（实测反馈"画质不清晰"）。
+     * 码率给 4 Mbps 是**上限**，编码器对静态界面实际只会用几百 Kbps，
+     * 只有滚动/动画时才需要更多——不设自适应，弱网下宁可掉帧也不糊。
+     */
+    fun start(maxSize: Int = 1_280, maxFps: Int = 30, bitRate: Int = 4_000_000) {
         if (!started.compareAndSet(false, true)) return
         onPhase(AssistPhase.Preparing, "正在准备…")
 

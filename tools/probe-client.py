@@ -38,10 +38,28 @@ KEY_ACTION_UP = 1
 POINTER_ID_FINGER = 0xFFFFFFFFFFFFFFFF - 1  # SC_POINTER_ID_GENERIC_FINGER = -2
 
 
+def _read_line(sock: socket.socket, limit: int = 64) -> str:
+    """逐字节读到换行。
+
+    这里**不能**用 recv(n)：中继回完 `OK\\n` 后立刻开始转发数据，
+    两个 TCP 段可能被一次 recv 一起读到，多读的字节就是视频流开头——
+    后面的解析会因此错位，表现为"握手失败：'OK\\n23078RKD5C…'"。
+    """
+    buf = bytearray()
+    while len(buf) < limit:
+        ch = sock.recv(1)
+        if not ch:
+            break
+        if ch == b"\n":
+            break
+        buf += ch
+    return buf.decode(errors="replace").strip()
+
+
 def connect(host: str, port: int, verb: str, token: str) -> socket.socket:
     s = socket.create_connection((host, port), timeout=10)
     s.sendall(f"{verb} {token}\n".encode())
-    reply = s.recv(16).decode(errors="replace").strip()
+    reply = _read_line(s)
     if reply != "OK":
         raise RuntimeError(f"{verb} 握手失败：{reply!r}")
     return s

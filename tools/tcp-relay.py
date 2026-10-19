@@ -50,6 +50,10 @@ def serve(listen_port: int, target_host: str, target_port: int) -> None:
         client, _ = server.accept()
         try:
             upstream = socket.create_connection((target_host, target_port), timeout=5)
+            # 连接建立后必须清掉超时：否则这个 5 秒会变成**每次 recv 的读超时**，
+            # 空闲 5 秒就抛 socket.timeout 把整条转发掐掉（表现为"控制通道莫名其妙断开，
+            # 视频却一直正常"——因为视频一直有数据，控制通道不操作时是安静的）。
+            upstream.settimeout(None)
         except OSError as exc:
             print(f"[relay] 连接目标失败：{exc}", flush=True)
             client.close()

@@ -44,7 +44,8 @@
 
 ```bash
 # 方式 A（推荐）：配对中继。长辈手机除了本 App 什么都不用装
-python3 tools/relay-server.py --listen 0.0.0.0:27180
+# 在任意有公网 IP 的机器上编译并常驻运行（详见 docs/ops/relay-node.md）
+NODE=root@<节点> bash tools/deploy-relay.sh
 
 # 方式 B：WireGuard。要链路加密时用
 sudo bash tools/setup-node.sh

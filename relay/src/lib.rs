@@ -1,0 +1,417 @@
+//! 配对中继：让"隔着 NAT 的两台手机"建立连接，不需要 VPN，也不需要记地址。
+//!
+//! 为什么需要它
+//! ------------
+//! 两台手机通常都在 NAT 后面，谁也连不上谁。传统做法是组一个 VPN（WireGuard / Tailscale），
+//! 但那要在**老人手机上再装一个 App、再导入一份配置**——这正是我们想避免的负担。
+//!
+//! 设计：常连接 + 按需开流（v2）
+//! ---------------------------
+//! v1 的问题是"登记一次就被配对消耗掉"，长辈端要隔一会儿才重新登记，控制端可能等上几十秒。
+//! v2 把连接分成两类：
+//!
+//!   1. **信令连接**（长辈端 ↔ 中继，常驻）：`AGENT <口令哈希> signaling`，
+//!      每 10 秒一次 `PING / PONG` 心跳。
+//!   2. **数据连接**（按需建立）：控制端来 `FIND <哈希> <角色>` 时，中继通过信令连接
+//!      告诉长辈端 `OPEN <角色>`，长辈端**立刻**开一条数据连接上来，两边一对接就开始转发。
+//!
+//! 于是配对是"毫秒级"的，而不是"等下一次登记"。任何一端掉线都能在心跳周期内被发现并重建。
+//!
+//! 安全边界
+//! --------
+//! - 线上只有口令的哈希，没有口令本身；不知道口令就配不上对。
+//! - 中继不解析、不落盘内容，只在内存里保存"哈希 → 连接"的映射。
+//! - 中继是明文字节转发，请放在自己的机器/内网里；公网暴露时自行加 TLS 或限制来源。
+//!
+//! 协议细节见 `docs/ops/relay-node.md`。
+
+use std::collections::HashMap;
+use std::fmt;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use socket2::SockRef;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc, oneshot};
+
+pub const AGENT_VERB: &str = "AGENT";
+pub const DATA_VERB: &str = "DATA";
+pub const FIND_VERB: &str = "FIND";
+
+pub const ROLE_CONTROL: &str = "control";
+pub const ROLE_VIDEO: &str = "video";
+
+/// 双方约定的心跳间隔。
+pub const PING_INTERVAL: Duration = Duration::from_secs(10);
+/// 超过这么久没心跳就认为信令连接已死。
+pub const SIGNALING_TIMEOUT: Duration = Duration::from_secs(35);
+/// 等长辈端开出数据连接的最长时间（移动网络要留余量）。
+pub const DATA_TIMEOUT: Duration = Duration::from_secs(12);
+
+/// 首行协议行的长度上限，防止坏连接把内存撑爆。
+const LINE_LIMIT: usize = 256;
+
+fn is_role(value: &str) -> bool {
+    value == ROLE_CONTROL || value == ROLE_VIDEO
+}
+
+/// 日志：节点上交给 journald 收集，这里只保证按行、带时间。
+pub fn log(message: impl fmt::Display) {
+    println!("[{}] {}", timestamp(), message);
+}
+
+fn timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
+    format!("{h:02}:{m:02}:{s:02} UTC")
+}
+
+fn short(hash: &str) -> &str {
+    hash.get(..8).unwrap_or(hash)
+}
+
+/// 信令任务收到的指令。
+enum Signal {
+    Open(String),
+    Close,
+}
+
+type SignalTx = mpsc::Sender<Signal>;
+
+struct Waiting {
+    id: u64,
+    tx: oneshot::Sender<(OwnedReadHalf, OwnedWriteHalf)>,
+}
+
+/// 信令连接 + 待配对请求，全部只在内存里。
+#[derive(Default)]
+pub struct Registry {
+    signaling: HashMap<String, SignalTx>,
+    waiting: HashMap<(String, String), Waiting>,
+    next_id: u64,
+}
+
+impl Registry {
+    fn stats(&self) -> String {
+        format!(
+            "信令 {} 条，待配对 {} 个",
+            self.signaling.len(),
+            self.waiting.len()
+        )
+    }
+}
+
+/// 开启保活：否则一端异常退出时，另一端可能长时间察觉不到（连接半开）。
+/// 信令靠 PING 兜底，数据流没有应用层心跳，只能靠 TCP keepalive。
+fn tune(stream: &TcpStream) {
+    let _ = stream.set_nodelay(true);
+    let keepalive = {
+        let ka = socket2::TcpKeepalive::new()
+            .with_time(Duration::from_secs(15))
+            .with_interval(Duration::from_secs(5));
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let ka = ka.with_retries(3);
+        ka
+    };
+    let _ = SockRef::from(stream).set_tcp_keepalive(&keepalive);
+}
+
+/// 逐字节读到换行。
+///
+/// 这里**不能**用带缓冲的读取：握手行之后紧接着就是二进制数据流，
+/// 预读会把流的开头一并吞掉（控制端曾因此出现"设备名乱码、解不出帧"）。
+async fn read_line_raw(rd: &mut OwnedReadHalf, limit: usize) -> Option<String> {
+    let mut buf = Vec::with_capacity(32);
+    loop {
+        let byte = rd.read_u8().await.ok()?;
+        if byte == b'\n' {
+            break;
+        }
+        if buf.len() >= limit {
+            return None;
+        }
+        buf.push(byte);
+    }
+    Some(String::from_utf8_lossy(&buf).trim().to_string())
+}
+
+/// 处理一条新连接：读首行，按动词分流。
+pub async fn handle_connection(
+    stream: TcpStream,
+    peer: SocketAddr,
+    registry: Arc<Mutex<Registry>>,
+) {
+    tune(&stream);
+    let (mut rd, wr) = stream.into_split();
+
+    let Some(line) = read_line_raw(&mut rd, LINE_LIMIT).await else {
+        return;
+    };
+    let parts: Vec<&str> = line.split(' ').collect();
+    let verb = parts.first().copied().unwrap_or("").to_uppercase();
+
+    match verb.as_str() {
+        AGENT_VERB if parts.len() == 3 && parts[2] == "signaling" => {
+            handle_signaling(rd, wr, parts[1].to_string(), peer, registry).await;
+        }
+        DATA_VERB if parts.len() == 3 && is_role(parts[2]) => {
+            handle_data(rd, wr, parts[1].to_string(), parts[2].to_string(), registry).await;
+        }
+        FIND_VERB if parts.len() == 3 && is_role(parts[2]) => {
+            handle_controller(rd, wr, parts[1].to_string(), parts[2].to_string(), peer, registry)
+                .await;
+        }
+        _ => log(format!("无法识别的请求：{line:?} 来自 {peer}")),
+    }
+}
+
+/// 常驻信令连接：处理心跳，并在控制端到来时通知长辈端开流。
+async fn handle_signaling(
+    rd: OwnedReadHalf,
+    mut wr: OwnedWriteHalf,
+    hash: String,
+    peer: SocketAddr,
+    registry: Arc<Mutex<Registry>>,
+) {
+    // 必须先应答，长辈端才知道登记成功
+    if wr.write_all(b"OK\n").await.is_err() {
+        return;
+    }
+
+    let (tx, mut rx) = mpsc::channel::<Signal>(8);
+    {
+        let mut reg = lock(&registry);
+        if let Some(old) = reg.signaling.insert(hash.clone(), tx.clone()) {
+            let _ = old.try_send(Signal::Close);
+            log(format!("信令重复登记（{}…），替换旧连接", short(&hash)));
+        }
+        log(format!(
+            "长辈端信令已连接（{}…）来自 {} —— {}",
+            short(&hash),
+            peer.ip(),
+            reg.stats()
+        ));
+    }
+
+    let mut lines = BufReader::new(rd).lines();
+    let idle = tokio::time::sleep(SIGNALING_TIMEOUT);
+    tokio::pin!(idle);
+
+    loop {
+        tokio::select! {
+            _ = &mut idle => break,
+            message = rx.recv() => match message {
+                Some(Signal::Open(role)) => {
+                    if wr.write_all(format!("OPEN {role}\n").as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Signal::Close) | None => break,
+            },
+            line = lines.next_line() => match line {
+                Ok(Some(text)) => {
+                    if text.trim() == "PING" && wr.write_all(b"PONG\n").await.is_err() {
+                        break;
+                    }
+                }
+                _ => break,
+            },
+        }
+        idle.as_mut().reset(tokio::time::Instant::now() + SIGNALING_TIMEOUT);
+    }
+
+    {
+        let mut reg = lock(&registry);
+        // 只有"当前登记的仍是我"才注销——重复登记时旧连接不能把新连接抹掉
+        if reg
+            .signaling
+            .get(&hash)
+            .is_some_and(|current| current.same_channel(&tx))
+        {
+            reg.signaling.remove(&hash);
+        }
+        log(format!("长辈端信令断开（{}…）", short(&hash)));
+    }
+}
+
+/// 长辈端按需开出的数据连接：交给正在等的控制端。
+async fn handle_data(
+    rd: OwnedReadHalf,
+    mut wr: OwnedWriteHalf,
+    hash: String,
+    role: String,
+    registry: Arc<Mutex<Registry>>,
+) {
+    let key = (hash.clone(), role.clone());
+    let waiting = lock(&registry).waiting.remove(&key);
+
+    if wr.write_all(b"OK\n").await.is_err() {
+        return;
+    }
+    match waiting {
+        Some(waiter) => {
+            let _ = waiter.tx.send((rd, wr));
+        }
+        None => {
+            log(format!("收到没人等待的 {role} 数据连接，丢弃"));
+        }
+    }
+}
+
+/// 控制端找设备：通过信令让长辈端开流，等它连上来后把两条连接对接。
+async fn handle_controller(
+    rd: OwnedReadHalf,
+    mut wr: OwnedWriteHalf,
+    hash: String,
+    role: String,
+    peer: SocketAddr,
+    registry: Arc<Mutex<Registry>>,
+) {
+    let signaling = lock(&registry).signaling.get(&hash).cloned();
+    let Some(signaling) = signaling else {
+        log(format!(
+            "控制端找 {role}（{}…）—— 长辈端不在线",
+            short(&hash)
+        ));
+        let _ = wr.write_all(b"ERR\n").await;
+        return;
+    };
+
+    let key = (hash.clone(), role.clone());
+    let (tx, rx) = oneshot::channel();
+    let id = {
+        let mut reg = lock(&registry);
+        reg.next_id += 1;
+        let id = reg.next_id;
+        if reg.waiting.insert(key.clone(), Waiting { id, tx }).is_some() {
+            // 同一角色只允许一个等待者：后来的顶掉先来的（旧 waiter 的 sender 被丢弃 → 它立刻失败）
+            log(format!("{role} 已有等待者，后来的顶掉先来的"));
+        }
+        id
+    };
+
+    if signaling.send(Signal::Open(role.clone())).await.is_err() {
+        log("通知长辈端失败，连接可能已失效");
+        remove_waiting(&registry, &key, id);
+        let _ = wr.write_all(b"ERR\n").await;
+        return;
+    }
+
+    // 长辈端一般几十毫秒就开好流；等不到就明确失败，不让控制端干等
+    match tokio::time::timeout(DATA_TIMEOUT, rx).await {
+        Ok(Ok((agent_rd, agent_wr))) => {
+            if wr.write_all(b"OK\n").await.is_err() {
+                return;
+            }
+            log(format!(
+                "配对成功 {role}（{}…）{} -> 长辈端",
+                short(&hash),
+                peer.ip()
+            ));
+            splice((rd, wr), (agent_rd, agent_wr)).await;
+        }
+        _ => {
+            remove_waiting(&registry, &key, id);
+            log(format!("等长辈端开 {role} 流超时"));
+        }
+    }
+}
+
+/// 只在登记的仍是我时删除，避免误删后来者的等待位。
+fn remove_waiting(registry: &Arc<Mutex<Registry>>, key: &(String, String), id: u64) {
+    let mut reg = lock(registry);
+    if reg.waiting.get(key).is_some_and(|waiting| waiting.id == id) {
+        reg.waiting.remove(key);
+    }
+}
+
+/// 两条连接字节级对接，任一方向断开就一起收摊。
+async fn splice(
+    controller: (OwnedReadHalf, OwnedWriteHalf),
+    agent: (OwnedReadHalf, OwnedWriteHalf),
+) {
+    let (mut controller_rd, mut controller_wr) = controller;
+    let (mut agent_rd, mut agent_wr) = agent;
+
+    tokio::select! {
+        result = tokio::io::copy(&mut controller_rd, &mut agent_wr) => {
+            report_end("控制端→长辈端", result);
+        }
+        result = tokio::io::copy(&mut agent_rd, &mut controller_wr) => {
+            report_end("长辈端→控制端", result);
+        }
+    }
+    // 两组半连接在这里一起析构，两个 socket 都会关闭
+}
+
+/// 谁先断开是排查"用着用着就断了"的关键信息，按方向记下来。
+fn report_end(direction: &str, result: std::io::Result<u64>) {
+    match result {
+        Ok(bytes) => log(format!("连接结束（{direction} 先断，共 {bytes} 字节）")),
+        Err(error) => log(format!("连接异常（{direction}）：{error}")),
+    }
+}
+
+fn lock(registry: &Arc<Mutex<Registry>>) -> std::sync::MutexGuard<'_, Registry> {
+    registry.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 在已绑定好的监听器上跑服务（测试里也用它拿到随机端口）。
+pub async fn serve(listener: TcpListener) {
+    let registry = Arc::new(Mutex::new(Registry::default()));
+    log(format!(
+        "配对中继已启动（v2：常连接 + 按需开流），监听 {}",
+        listener
+            .local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| "?".to_string())
+    ));
+
+    loop {
+        let (stream, peer) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(error) => {
+                log(format!("accept 失败：{error}"));
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        let registry = Arc::clone(&registry);
+        tokio::spawn(async move {
+            handle_connection(stream, peer, registry).await;
+        });
+    }
+}
+
+/// 绑定地址并进入服务循环。
+pub async fn run(addr: SocketAddr) -> std::io::Result<()> {
+    let listener = TcpListener::bind(addr).await?;
+    serve(listener).await;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_known_roles_are_accepted() {
+        assert!(is_role("control"));
+        assert!(is_role("video"));
+        assert!(!is_role("screen"));
+        assert!(!is_role(""));
+    }
+
+    #[test]
+    fn short_hash_never_panics() {
+        assert_eq!(short("0123456789abcdef"), "01234567");
+        assert_eq!(short("abc"), "abc");
+    }
+}
