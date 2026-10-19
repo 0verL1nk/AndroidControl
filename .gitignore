@@ -19,3 +19,7 @@ captures/
 # 系统
 .DS_Store
 Thumbs.db
+
+# Rust 构建产物
+relay/target/
+target/

@@ -28,6 +28,9 @@ class AgentProxy(
     private val running = AtomicBoolean(false)
     private val fanout = VideoFanout(streams.videoIn)
 
+    /** 当前控制客户端；引擎回传的设备消息只写给"现在这个"。 */
+    private val controlSink = java.util.concurrent.atomic.AtomicReference<OutputStream?>(null)
+
     private var videoServer: ServerSocket? = null
     private var controlServer: ServerSocket? = null
 
@@ -44,6 +47,10 @@ class AgentProxy(
         check(running.compareAndSet(false, true)) { "已在运行" }
 
         Thread({ fanout.readLoop { running.get() } }, "video-read")
+            .apply { isDaemon = true; start() }
+        // 引擎的控制消息只有一条来源，固定由一个线程读走；
+        // 控制端重连多少次都不会多出读线程（否则多个线程会抢同一条流）。
+        Thread({ pumpDeviceMessages() }, "control-uplink")
             .apply { isDaemon = true; start() }
 
         controlServer = ServerSocket(control).also { controlPort = it.localPort }
@@ -114,12 +121,33 @@ class AgentProxy(
                 socket.use { s ->
                     val out = s.getOutputStream()
                     if (!authenticate(s.inputStream, out, "HELLO")) return@use
-                    val upstream = Thread({ pump(streams.controlIn, out) }, "ctrl-up")
-                        .apply { isDaemon = true; start() }
-                    pump(s.inputStream, streams.controlOut)
-                    upstream.interrupt()
+                    controlSink.set(out)
+                    try {
+                        pump(s.inputStream, streams.controlOut)
+                    } finally {
+                        controlSink.compareAndSet(out, null)
+                        Log.i(TAG, "控制连接结束")
+                    }
                 }
             }.apply { isDaemon = true; name = "control-client"; start() }
+        }
+    }
+
+    /** 把引擎回传的设备消息写给当前控制端；没有控制端时直接丢弃（不能阻塞引擎）。 */
+    private fun pumpDeviceMessages() {
+        val buffer = ByteArray(64 * 1024)
+        try {
+            while (running.get()) {
+                val n = streams.controlIn.read(buffer)
+                if (n < 0) break
+                val out = controlSink.get() ?: continue
+                runCatching {
+                    out.write(buffer, 0, n)
+                    out.flush()
+                }
+            }
+        } catch (t: Throwable) {
+            Log.i(TAG, "引擎控制消息读取结束：${t.message}")
         }
     }
 

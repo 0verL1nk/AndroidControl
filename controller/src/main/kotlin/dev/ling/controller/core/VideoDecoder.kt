@@ -4,29 +4,32 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.util.Log
 import android.view.Surface
+import dev.ling.protocol.ScrcpyVideoStream
+import dev.ling.protocol.VideoPacket
 import java.io.InputStream
 import java.nio.ByteBuffer
 
 /**
  * 把长辈端发来的 scrcpy 视频流解到 [Surface] 上。
  *
- * 流的形状见 specs/001-remote-android-control/contracts/wire-protocol.md：
- *   64 字节设备名 → 4 字节编码 id(必须是 h264) → 若干个 12 字节头 + 负载
+ * 职责边界：拆包交给 [ScrcpyVideoStream]，SPS/PPS 解析交给 [SpsPps]，
+ * 这里只负责解码器的生命周期与"什么时候能喂帧"。
  *
- * 两个必须注意的点（都是实测踩出来的）：
- * 1. 宽高是会话包里的 **32 位整数**；
- * 2. 联发科等硬解码器要求 SPS/PPS 通过 `MediaFormat` 的 `csd-0/csd-1` 传入，
- *    只把配置包当普通输入缓冲喂进去会报 "CSD is not calculated" 并永远不出帧。
- *    因此要等"尺寸 + 配置包"都到齐再创建解码器。
+ * 两条真机踩出来的规则：
+ * 1. 尺寸与配置包都到齐才创建解码器（MediaFormat 需要 csd-0/csd-1）；
+ * 2. 首个关键帧之前不能喂 P 帧——解码器会吃进去占住输入缓冲却不出图，
+ *    等真正的 IDR 到达时反而没缓冲可用，表现为永久黑屏。
  */
 class VideoDecoder(
-    private val input: InputStream,
+    input: InputStream,
     private val surface: Surface,
 ) {
 
     fun interface SizeListener {
         fun onSizeChanged(width: Int, height: Int)
     }
+
+    private val stream = ScrcpyVideoStream(input)
 
     @Volatile
     var frameWidth: Int = 0
@@ -40,136 +43,171 @@ class VideoDecoder(
     var frameCount: Long = 0
         private set
 
-    @Volatile
-    var bytesReceived: Long = 0
-        private set
+    val bytesReceived: Long get() = stream.payloadBytes
 
     var onSizeChanged: SizeListener? = null
+
+    /** 解码卡住时回调，让上层重新请求关键帧。 */
+    var onNeedKeyFrame: (() -> Unit)? = null
 
     private var codec: MediaCodec? = null
     private var running = true
     private var config: ByteArray? = null
+    private var sawKeyFrame = false
+    private var fedPackets = 0
+
+    private var droppedBeforeKeyFrame = 0
+    private var starvationSince = 0L
+    private var lastStarvationLogAt = 0L
+    private var lastKeyFrameRequestAt = 0L
 
     /** 在独立线程里跑；异常直接抛出，由上层决定是否重连。 */
     fun decodeLoop() {
-        val deviceMeta = readFully(64)
-        val codecId = String(readFully(4))
-        Log.i(TAG, "设备名=${String(deviceMeta).trim { it <= '\u0000' }} 编码=$codecId")
-        if (codecId != "h264") throw IllegalStateException("不支持的编码：$codecId")
+        val device = stream.readDeviceInfo()
+        Log.i(TAG, "设备名=${device.name} 编码=${device.codecId}")
+        check(device.codecId == CODEC_ID) { "不支持的编码：${device.codecId}" }
 
-        val header = ByteArray(12)
         while (running) {
-            readInto(header)
-            val first = header[0].toInt() and 0xFF
-
-            if (first and 0x80 != 0) {
-                // 会话包：宽高各是 32 位整数
-                val w = readInt(header, 4)
-                val h = readInt(header, 8)
-                if (w != frameWidth || h != frameHeight) {
-                    frameWidth = w
-                    frameHeight = h
-                    Log.i(TAG, "画面尺寸 ${w}x$h")
-                    onSizeChanged?.onSizeChanged(w, h)
-                    ensureCodec(force = true)
-                }
-                continue
+            when (val packet = stream.next()) {
+                is VideoPacket.Session -> onSession(packet)
+                is VideoPacket.Config -> onConfig(packet)
+                is VideoPacket.Frame -> onFrame(packet)
             }
-
-            val isConfig = first and 0x40 != 0
-            val isKeyFrame = first and 0x20 != 0
-            val pts = readLong(header, 0) and 0x1FFFFFFFFFFFFFFFL
-            val size = readInt(header, 8)
-            val payload = if (size > 0) readFully(size) else ByteArray(0)
-            bytesReceived += size
-
-            if (isConfig) {
-                config = payload
-                Log.i(TAG, "收到配置包（${payload.size} 字节）")
-                ensureCodec()
-                continue
-            }
-
-            ensureCodec()
-            feed(payload, pts, isConfig = false, isKeyFrame = isKeyFrame)
         }
     }
 
     fun stop() {
         running = false
-        runCatching { codec?.stop() }
-        runCatching { codec?.release() }
-        codec = null
+        releaseCodec()
     }
 
-    /** 尺寸与配置包都齐了才建解码器；尺寸变化时重建。 */
+    // ── 包处理 ──────────────────────────────────────────────────
+
+    private fun onSession(session: VideoPacket.Session) {
+        if (session.width == frameWidth && session.height == frameHeight) return
+        frameWidth = session.width
+        frameHeight = session.height
+        Log.i(TAG, "画面尺寸 ${session.width}x${session.height}")
+        onSizeChanged?.onSizeChanged(session.width, session.height)
+        ensureCodec(force = true)
+    }
+
+    private fun onConfig(packet: VideoPacket.Config) {
+        config = packet.data
+        Log.i(TAG, "收到配置包（${packet.data.size} 字节）")
+        ensureCodec()
+    }
+
+    private fun onFrame(frame: VideoPacket.Frame) {
+        val codec = codec ?: return
+
+        // 先把已经解好的帧释放掉：输出积压时输入缓冲永远回不来
+        drainOutputs(codec)
+
+        if (!frame.isKey && !sawKeyFrame) {
+            droppedBeforeKeyFrame++
+            if (droppedBeforeKeyFrame == 1 || droppedBeforeKeyFrame % 60 == 0) {
+                Log.i(TAG, "等待关键帧，已丢弃 $droppedBeforeKeyFrame 帧")
+            }
+            return
+        }
+
+        val index = dequeueInput(codec)
+        if (index < 0) {
+            onStarvation()
+            return
+        }
+        starvationSince = 0L
+
+        if (frame.isKey && !sawKeyFrame) {
+            sawKeyFrame = true
+            if (droppedBeforeKeyFrame > 0) {
+                Log.i(TAG, "关键帧已到（此前丢弃 $droppedBeforeKeyFrame 帧）")
+            }
+        }
+
+        fedPackets++
+        if (fedPackets <= 3) {
+            Log.i(TAG, "送入第 $fedPackets 帧（key=${frame.isKey}，${frame.data.size} 字节）")
+        }
+
+        queueInput(codec, index, frame)
+
+        // 远程操作对延迟敏感：拿到就立刻上屏，不攒帧
+        drainOutputs(codec)
+    }
+
+    private fun queueInput(codec: MediaCodec, index: Int, frame: VideoPacket.Frame) {
+        val buffer = codec.getInputBuffer(index)
+        if (buffer == null) {
+            // 拿不到 ByteBuffer 也必须还回 index，否则这一格缓冲永久泄漏
+            runCatching { codec.queueInputBuffer(index, 0, 0, frame.pts, 0) }
+            return
+        }
+        buffer.clear()
+        buffer.put(frame.data)
+        val flags = if (frame.isKey) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+        codec.queueInputBuffer(index, 0, frame.data.size, frame.pts, flags)
+    }
+
+    // ── 解码器生命周期 ──────────────────────────────────────────
+
+    /** 尺寸与配置包都齐了才建解码器；尺寸变化或卡死时 [force] 重建。 */
     private fun ensureCodec(force: Boolean = false) {
         if (frameWidth <= 0 || frameHeight <= 0) return
         val csd = config ?: return
         if (codec != null && !force) return
 
-        runCatching { codec?.stop() }
-        runCatching { codec?.release() }
-        codec = null
+        releaseCodec()
 
-        val (sps, pps) = splitSpsPps(csd)
-        if (sps.isEmpty() || pps.isEmpty()) {
+        val ssp = SpsPps.parse(csd)
+        if (!ssp.isComplete) {
             Log.w(TAG, "配置包里没有找到 SPS/PPS，退化为按 CODEC_CONFIG 缓冲喂入")
         }
 
         val format = MediaFormat.createVideoFormat(MIME, frameWidth, frameHeight).apply {
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 1 shl 20)
-            if (sps.isNotEmpty()) setByteBuffer("csd-0", ByteBuffer.wrap(sps))
-            if (pps.isNotEmpty()) setByteBuffer("csd-1", ByteBuffer.wrap(pps))
+            if (ssp.sps.isNotEmpty()) setByteBuffer("csd-0", ByteBuffer.wrap(ssp.sps))
+            if (ssp.pps.isNotEmpty()) setByteBuffer("csd-1", ByteBuffer.wrap(ssp.pps))
         }
 
         codec = MediaCodec.createDecoderByType(MIME).apply {
             configure(format, surface, null, 0)
             start()
         }
-        Log.i(TAG, "解码器已创建 ${frameWidth}x$frameHeight（csd: ${sps.size}/${pps.size} 字节）")
+        // 新解码器必须重新等一个 IDR：旧的关键帧对它没有意义
+        sawKeyFrame = false
+        droppedBeforeKeyFrame = 0
+        starvationSince = 0L
+        Log.i(TAG, "解码器已创建 ${frameWidth}x$frameHeight（csd: ${ssp.sps.size}/${ssp.pps.size} 字节）")
     }
 
-    private var fedPackets = 0
+    private fun releaseCodec() {
+        runCatching { codec?.stop() }
+        runCatching { codec?.release() }
+        codec = null
+    }
 
-    private fun feed(payload: ByteArray, pts: Long, isConfig: Boolean, isKeyFrame: Boolean) {
-        val codec = codec ?: return
+    // ── 缓冲与卡死恢复 ──────────────────────────────────────────
 
-        // 关键帧只有开头那一个；拿不到输入缓冲就丢帧会导致永远没有画面，
-        // 所以这里重试几次而不是直接放弃。
-        var index = -1
-        var tries = 0
-        while (index < 0 && tries < INPUT_RETRIES) {
-            index = codec.dequeueInputBuffer(TIMEOUT_US)
-            tries++
+    private fun dequeueInput(codec: MediaCodec): Int {
+        repeat(INPUT_RETRIES) {
+            val index = codec.dequeueInputBuffer(TIMEOUT_US)
+            if (index >= 0) return index
         }
-        if (index < 0) {
-            Log.w(TAG, "没有可用的输入缓冲，丢弃一帧（key=$isKeyFrame size=${payload.size}）")
-            return
-        }
-        fedPackets++
-        if (fedPackets <= 3) {
-            Log.i(TAG, "送入第 $fedPackets 帧（key=$isKeyFrame，${payload.size} 字节）")
-        }
-        if (true) {
-            val buffer = codec.getInputBuffer(index) ?: return
-            buffer.clear()
-            buffer.put(payload)
-            var flags = 0
-            if (isConfig) flags = flags or MediaCodec.BUFFER_FLAG_CODEC_CONFIG
-            if (isKeyFrame) flags = flags or MediaCodec.BUFFER_FLAG_KEY_FRAME
-            codec.queueInputBuffer(index, 0, payload.size, pts, flags)
-        }
+        return -1
+    }
 
-        // 远程操作对延迟敏感：拿到就立刻上屏，不攒帧
+    private fun drainOutputs(codec: MediaCodec) {
         val info = MediaCodec.BufferInfo()
         while (true) {
-            val outIndex = codec.dequeueOutputBuffer(info, OUTPUT_TIMEOUT_US)
+            val outIndex = runCatching { codec.dequeueOutputBuffer(info, OUTPUT_TIMEOUT_US) }
+                .getOrNull() ?: return
             if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 Log.i(TAG, "解码器输出格式：${codec.outputFormat}")
                 continue
             }
-            if (outIndex < 0) break
+            if (outIndex < 0) return
             codec.releaseOutputBuffer(outIndex, true)
             frameCount++
             if (frameCount == 1L) Log.i(TAG, "首帧已上屏（${info.size} 字节）")
@@ -177,67 +215,39 @@ class VideoDecoder(
     }
 
     /**
-     * 从 Annex-B 配置包里切出 SPS（NAL 7）与 PPS（NAL 8）。
-     * 返回的每个数组都带起始码，符合 MediaFormat csd 的要求。
+     * 输入缓冲一直拿不到，说明解码器被卡住了（等参考帧、或者输出没人释放）。
+     * 先请求关键帧；还不行就重建解码器——重建会丢弃所有积压，代价只是多等一个 IDR。
      */
-    private fun splitSpsPps(data: ByteArray): Pair<ByteArray, ByteArray> {
-        val starts = mutableListOf<Int>()
-        var i = 0
-        while (i + 3 < data.size) {
-            val is4 = data[i].toInt() == 0 && data[i + 1].toInt() == 0 &&
-                data[i + 2].toInt() == 0 && data[i + 3].toInt() == 1
-            val is3 = data[i].toInt() == 0 && data[i + 1].toInt() == 0 && data[i + 2].toInt() == 1
-            when {
-                is4 -> { starts += i; i += 4 }
-                is3 -> { starts += i; i += 3 }
-                else -> i++
-            }
+    private fun onStarvation() {
+        val now = System.currentTimeMillis()
+        if (starvationSince == 0L) starvationSince = now
+        if (now - lastStarvationLogAt >= STARVATION_LOG_INTERVAL_MS) {
+            Log.w(TAG, "没有可用的输入缓冲，丢弃一帧")
+            lastStarvationLogAt = now
         }
-        if (starts.isEmpty()) return ByteArray(0) to ByteArray(0)
 
-        var sps = ByteArray(0)
-        var pps = ByteArray(0)
-        for ((index, start) in starts.withIndex()) {
-            val end = starts.getOrNull(index + 1) ?: data.size
-            val nal = data.copyOfRange(start, end)
-            val headerIndex = if (nal.size > 3 && nal[2].toInt() == 1) 3 else 4
-            if (nal.size <= headerIndex) continue
-            when (nal[headerIndex].toInt() and 0x1F) {
-                7 -> sps = nal
-                8 -> pps = nal
-            }
+        if (now - lastKeyFrameRequestAt >= KEY_FRAME_REQUEST_INTERVAL_MS) {
+            lastKeyFrameRequestAt = now
+            onNeedKeyFrame?.invoke()
         }
-        return sps to pps
-    }
 
-    private fun readInt(buf: ByteArray, offset: Int): Int =
-        ((buf[offset].toInt() and 0xFF) shl 24) or
-            ((buf[offset + 1].toInt() and 0xFF) shl 16) or
-            ((buf[offset + 2].toInt() and 0xFF) shl 8) or
-            (buf[offset + 3].toInt() and 0xFF)
-
-    private fun readLong(buf: ByteArray, offset: Int): Long {
-        var v = 0L
-        for (i in 0 until 8) v = (v shl 8) or (buf[offset + i].toLong() and 0xFF)
-        return v
-    }
-
-    private fun readFully(size: Int): ByteArray = ByteArray(size).also { readInto(it) }
-
-    private fun readInto(buf: ByteArray) {
-        var read = 0
-        while (read < buf.size) {
-            val n = input.read(buf, read, buf.size - read)
-            if (n < 0) throw java.io.EOFException("视频流结束")
-            read += n
+        if (now - starvationSince >= RECOVER_AFTER_MS) {
+            Log.w(TAG, "解码器持续卡住，重建")
+            onNeedKeyFrame?.invoke()
+            ensureCodec(force = true)
         }
     }
 
     private companion object {
         const val TAG = "VideoDecoder"
+        const val CODEC_ID = "h264"
         const val MIME = "video/avc"
         const val TIMEOUT_US = 10_000L
         const val OUTPUT_TIMEOUT_US = 5_000L
         const val INPUT_RETRIES = 20
+
+        const val STARVATION_LOG_INTERVAL_MS = 2_000L
+        const val KEY_FRAME_REQUEST_INTERVAL_MS = 1_500L
+        const val RECOVER_AFTER_MS = 3_000L
     }
 }
