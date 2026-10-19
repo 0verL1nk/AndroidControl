@@ -106,6 +106,9 @@ class RemoteSession(
         Thread({ channel.drainIncoming { running.get() } }, "control-drain")
             .apply { isDaemon = true; start() }
 
+        // 后连入的客户端需要一个新的 IDR 才能出画
+        channel.requestKeyFrame()
+
         val videoDecoder = VideoDecoder(session.videoIn, surface)
         decoder = videoDecoder
         videoDecoder.onSizeChanged = VideoDecoder.SizeListener { w, h ->

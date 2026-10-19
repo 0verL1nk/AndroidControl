@@ -41,6 +41,9 @@ class ControlChannel(
         send(ControlMessageWriter.scroll(x, y, width, height, hScroll, vScroll))
     }
 
+    /** 请求引擎重新出一个关键帧（见 ControlMessageWriter.resetVideo 的说明）。 */
+    fun requestKeyFrame() = send(ControlMessageWriter.resetVideo())
+
     @Synchronized
     private fun send(bytes: ByteArray) {
         try {

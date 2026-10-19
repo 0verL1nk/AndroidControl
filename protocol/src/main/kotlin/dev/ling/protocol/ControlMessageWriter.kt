@@ -15,6 +15,7 @@ object ControlMessageWriter {
     const val TYPE_INJECT_TOUCH_EVENT = 2
     const val TYPE_INJECT_SCROLL_EVENT = 3
     const val TYPE_BACK_OR_SCREEN_ON = 4
+    const val TYPE_RESET_VIDEO = 17
 
     // android.view.MotionEvent 的 action
     const val ACTION_DOWN = 0
@@ -112,6 +113,15 @@ object ControlMessageWriter {
     /** `BACK_OR_SCREEN_ON`，固定 2 字节；息屏时用于点亮屏幕。 */
     fun backOrScreenOn(action: Int): ByteArray =
         byteArrayOf(TYPE_BACK_OR_SCREEN_ON.toByte(), action.toByte())
+
+    /**
+     * 请求引擎重启视频编码（scrcpy 的 RESET_VIDEO，单字节）。
+     *
+     * 为什么需要它：解码器必须在**关键帧**之后才能出画面。控制端是后连进来的，
+     * 引擎开头发的那一个 IDR 早就过去了；而长辈端画面静止时引擎不会再产生帧。
+     * 发这条消息让引擎重新起一轮编码，客户端就能立刻拿到新的 IDR。
+     */
+    fun resetVideo(): ByteArray = byteArrayOf(TYPE_RESET_VIDEO.toByte())
 
     /** 把 [-16,16] 的浮点滚动量编码成 16 位整数。 */
     private fun encodeScroll(value: Float): Int {

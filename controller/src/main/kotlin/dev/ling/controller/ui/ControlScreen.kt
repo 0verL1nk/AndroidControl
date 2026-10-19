@@ -197,13 +197,13 @@ fun ControlScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                BarButton("返回") { session?.sendKey(ControlChannel.Keys.BACK) }
-                BarButton("主页") { session?.sendKey(ControlChannel.Keys.HOME) }
-                BarButton("最近") { session?.sendKey(ControlChannel.Keys.APP_SWITCH) }
-                BarButton("音量+") { session?.sendKey(ControlChannel.Keys.VOLUME_UP) }
-                BarButton("音量-") { session?.sendKey(ControlChannel.Keys.VOLUME_DOWN) }
-                BarButton(if (locked) "已锁定" else "锁定") { locked = !locked }
-                BarButton("断开", danger = true) { confirmDisconnect = true }
+                BarButton("返回", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.BACK) }
+                BarButton("主页", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.HOME) }
+                BarButton("最近", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.APP_SWITCH) }
+                BarButton("音量+", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.VOLUME_UP) }
+                BarButton("音量-", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.VOLUME_DOWN) }
+                BarButton(if (locked) "已锁定" else "锁定", Modifier.weight(1f)) { locked = !locked }
+                BarButton("断开", Modifier.weight(1f), danger = true) { confirmDisconnect = true }
             }
         }
 
@@ -280,8 +280,13 @@ private fun HudLine(text: String) {
 }
 
 @Composable
-private fun BarButton(label: String, danger: Boolean = false, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.size(width = 72.dp, height = 56.dp)) {
+private fun BarButton(
+    label: String,
+    modifier: Modifier = Modifier,
+    danger: Boolean = false,
+    onClick: () -> Unit,
+) {
+    TextButton(onClick = onClick, modifier = modifier.height(56.dp)) {
         Text(
             label,
             style = MaterialTheme.typography.bodyMedium,

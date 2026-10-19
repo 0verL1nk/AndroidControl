@@ -55,11 +55,24 @@ class SessionClient(
             tcpNoDelay = true // 远程操作对延迟敏感，禁用 Nagle
         }
 
+    /**
+     * 握手必须**逐字节**读到换行，不能用 BufferedReader：
+     * 它会预读，把紧接着 `OK\n` 之后的视频流头部一并吞进缓冲区，
+     * 之后改用原始流读取时那部分字节就丢了——表现为"设备名乱码、解不出帧"。
+     */
     private fun handshake(socket: Socket, line: String): String {
         socket.getOutputStream().write("$line\n".toByteArray())
         socket.getOutputStream().flush()
-        val reader = socket.getInputStream().bufferedReader()
-        return reader.readLine()?.trim().orEmpty()
+
+        val input = socket.getInputStream()
+        val sb = StringBuilder()
+        while (sb.length < 64) {
+            val b = input.read()
+            if (b < 0) break
+            if (b == '\n'.code) break
+            sb.append(b.toChar())
+        }
+        return sb.toString().trim()
     }
 
     private fun handshakeReason(reply: String): String = when {

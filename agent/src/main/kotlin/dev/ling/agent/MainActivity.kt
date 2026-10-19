@@ -1,6 +1,9 @@
 package dev.ling.agent
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -9,30 +12,51 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import dev.ling.agent.launcher.ShizukuLauncher
-import dev.ling.agent.session.AgentSession
 import rikka.shizuku.Shizuku
 
 /**
  * 长辈端主界面。
  *
- * 现在这个阶段的目标不是好看，而是**让每一步都可观测**：Shizuku 是否就绪、引擎是否起来、
- * 端口和临时口令是多少。适老化界面（大字号、一键求助）在 M4 重做，届时把这里的诊断信息
- * 收进"高级"折叠区。
+ * 当前阶段以"可观测"为主：每一步的状态都能看到。适老化重做在 M4——
+ * 届时主界面只保留状态大字与一个按钮，端口/口令/日志收进隐藏面板。
+ *
+ * 真正的会话由 [AgentService] 承载，Activity 退出不影响协助（前台服务保活）。
  */
 class MainActivity : Activity() {
 
     private lateinit var output: TextView
     private lateinit var toggle: Button
-    private var session: AgentSession? = null
-
     private val ui = Handler(Looper.getMainLooper())
+    private var lastState = ""
 
     private val permissionListener =
         Shizuku.OnRequestPermissionResultListener { _, grantResult ->
             log("Shizuku 授权：${if (grantResult == 0) "已允许" else "被拒绝（$grantResult）"}")
-            if (grantResult == 0) startSession()
+            if (grantResult == 0) startAssist()
         }
+
+    private val statePoller = object : Runnable {
+        override fun run() {
+            val state = AgentService.STATE
+            if (state != lastState) {
+                lastState = state
+                log(state)
+                if (state.contains("已准备好")) {
+                    AgentService.INFO?.let { info ->
+                        val ip = localIpAddress()
+                        log("")
+                        log("════ 控制端连接信息 ════")
+                        log("地址：$ip")
+                        log("控制端口：${info.controlPort}")
+                        log("视频端口：${info.videoPort}")
+                        log("口令：${info.token}")
+                        log("═══════════════════")
+                    }
+                }
+            }
+            ui.postDelayed(this, 500)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,7 +68,14 @@ class MainActivity : Activity() {
         }
         toggle = Button(this).apply {
             text = "允许协助"
-            setOnClickListener { if (session == null) requestAndStart() else stopSession() }
+            setOnClickListener {
+                if (AgentService.STATE.contains("已准备好") || AgentService.STATE.contains("准备")) {
+                    AgentService.stop(this@MainActivity)
+                    toggle.text = "允许协助"
+                } else {
+                    requestAndStart()
+                }
+            }
         }
 
         setContentView(
@@ -61,23 +92,30 @@ class MainActivity : Activity() {
         )
 
         Shizuku.addRequestPermissionResultListener(permissionListener)
-
+        requestNotificationPermission()
         log("长辈端已启动")
         log("Shizuku 运行中：${Shizuku.pingBinder()}")
-        log("Shizuku 版本：${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}")
         if (Shizuku.pingBinder()) {
-            log("本应用已获授权：${Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED}")
+            log("本应用已获授权：${Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED}")
         }
 
-        // 打开即允许协助：长辈点开这个应用本身就是明确的操作，
-        // 因此不做二次确认，直接进入"可被连接"状态（控制端连上后会有可见提示）。
+        ui.post(statePoller)
+        // 打开即进入"可被协助"：长辈点开这个应用本身就是明确的操作
         ui.postDelayed({ requestAndStart() }, 600)
     }
 
     override fun onDestroy() {
         Shizuku.removeRequestPermissionResultListener(permissionListener)
-        session?.stop()
+        ui.removeCallbacks(statePoller)
         super.onDestroy()
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2001)
+        }
     }
 
     private fun requestAndStart() {
@@ -85,39 +123,18 @@ class MainActivity : Activity() {
             log("Shizuku 未运行：请先启动 Shizuku 服务")
             return
         }
-        if (Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            startSession()
+        if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+            startAssist()
         } else {
             log("请求 Shizuku 授权…")
             Shizuku.requestPermission(REQUEST_CODE)
         }
     }
 
-    private fun startSession() {
-        if (session != null) return
-        val s = AgentSession(
-            context = this,
-            launcher = ShizukuLauncher(this),
-            onState = { log(it) },
-            onReady = { info ->
-                log("")
-                log("════ 控制端连接信息 ════")
-                log("地址：${localIpAddress()}")
-                log("控制端口：${info.controlPort}")
-                log("视频端口：${info.videoPort}")
-                log("口令：${info.token}")
-                log("═══════════════════")
-                ui.post { toggle.text = "结束协助" }
-            },
-        )
-        session = s
-        s.start()
-    }
-
-    private fun stopSession() {
-        session?.stop()
-        session = null
-        toggle.text = "允许协助"
+    private fun startAssist() {
+        log("启动协助服务…")
+        AgentService.start(this)
+        toggle.text = "结束协助"
     }
 
     private fun localIpAddress(): String =
@@ -138,6 +155,5 @@ class MainActivity : Activity() {
     private companion object {
         const val TAG = "AgentMain"
         const val REQUEST_CODE = 1001
-        const val EXTRA_AUTO_START = "auto_start"
     }
 }

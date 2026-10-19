@@ -34,6 +34,16 @@
             android:multiprocess="false"
             android:permission="android.permission.INTERNET" />
 
+        <!-- 常驻前台服务：会话期间防止被系统冻结，并让长辈端状态始终可见 -->
+        <service
+            android:name=".AgentService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="保持远程协助会话在线" />
+        </service>
+
         <!-- 以 shell 身份运行的 UserService（由 Shizuku 启动，不随本应用常驻） -->
         <service
             android:name="dev.ling.agent.engine.EngineService"

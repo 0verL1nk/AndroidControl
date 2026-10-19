@@ -43,6 +43,21 @@ class MainActivity : ComponentActivity() {
         var busy by remember { mutableStateOf(false) }
         var status by remember { mutableStateOf<String?>(null) }
         var active by remember { mutableStateOf<DeviceInfo?>(null) }
+
+        // 开发/验收用：am start ... --es host <ip> --es token <6位>
+        // 走"手动输入"同一条路径，避免为了自动化去驱动 UI。
+        remember {
+            val host = intent?.getStringExtra("host")
+            val token = intent?.getStringExtra("token")
+            if (!host.isNullOrBlank() && !token.isNullOrBlank()) {
+                val port = intent?.getIntExtra("port", 27185) ?: 27185
+                val device = DeviceInfo(host, port, port + 1, host, token = token)
+                store.upsert(device)
+                devices = store.all()
+                active = device
+            }
+            true
+        }
         val scope = rememberCoroutineScope()
 
         val current = active
