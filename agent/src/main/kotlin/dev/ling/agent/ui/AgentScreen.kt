@@ -58,6 +58,7 @@ fun AgentScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onRetry: () -> Unit,
+    onOpenShizuku: () -> Unit = {},
 ) {
     var tapCount by remember { mutableStateOf(0) }
     var showAdvanced by remember { mutableStateOf(false) }
@@ -170,6 +171,15 @@ fun AgentScreen(
                 .height(64.dp),
         ) {
             Text(buttonTextFor(state.phase), fontSize = 20.sp, fontWeight = FontWeight.Medium)
+        }
+
+        // 出错时多给一条"照着做就行"的路：直接把人送到需要点的地方，
+        // 少一步找图标、少一次打电话问
+        if (state.phase == AssistPhase.Error && state.error?.contains("Shizuku") == true) {
+            Spacer(Modifier.height(12.dp))
+            TextButton(onClick = onOpenShizuku) {
+                Text("打开 Shizuku，点一下「启动」", fontSize = 22.sp)
+            }
         }
     }
 

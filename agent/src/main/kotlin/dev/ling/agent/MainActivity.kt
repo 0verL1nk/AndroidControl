@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
                     onStart = { requestAndStart() },
                     onStop = { AgentService.stop(this) },
                     onRetry = { requestAndStart() },
+                    onOpenShizuku = { openShizuku() },
                 )
             }
         }
@@ -86,7 +87,25 @@ class MainActivity : ComponentActivity() {
 
     private fun startAssist() = AgentService.start(this)
 
+    /**
+     * 跳到 Shizuku 让它自己启动。
+     *
+     * 非 root 模式下 Shizuku 在设备重启后不会自己运行，而它没运行我们就拿不到 shell。
+     * 这是目前唯一需要长辈动手的场景，所以把操作压到最少：
+     * 打开 Shizuku → 点"启动"。
+     */
+    private fun openShizuku() {
+        val intent = packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
+        if (intent == null) {
+            AgentService.reportError("这台手机还没装 Shizuku，需要家人帮忙安装一次")
+            return
+        }
+        runCatching { startActivity(intent) }
+            .onFailure { AgentService.reportError("打不开 Shizuku，请让家人看看") }
+    }
+
     private companion object {
         const val REQUEST_CODE = 1001
+        const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     }
 }
