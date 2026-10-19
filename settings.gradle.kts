@@ -17,5 +17,6 @@ dependencyResolutionManagement {
 rootProject.name = "AndroidControl"
 
 include(":protocol")
+include(":design")
 include(":agent")
 include(":controller")

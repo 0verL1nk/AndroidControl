@@ -11,6 +11,11 @@ import android.os.IBinder
 import android.util.Log
 import dev.ling.agent.launcher.ShizukuLauncher
 import dev.ling.agent.session.AgentSession
+import dev.ling.agent.session.AgentUiState
+import dev.ling.agent.session.AssistPhase
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 长辈端的常驻服务。
@@ -60,11 +65,24 @@ class AgentService : Service() {
             onState = { message ->
                 Log.i(TAG, message)
                 STATE = message
+                _state.value = _state.value.copy(detail = message)
                 notify(buildNotification(message))
             },
             onReady = { info ->
                 INFO = info
+                _state.value = _state.value.copy(info = info)
                 notify(buildNotification("已准备好，等待家人连接"))
+            },
+            onPhase = { phase, message ->
+                Log.i(TAG, "阶段：$phase - $message")
+                _state.value = _state.value.copy(
+                    phase = phase,
+                    detail = message,
+                    error = if (phase == AssistPhase.Error) message else null,
+                    controllerConnected = phase == AssistPhase.Active,
+                    info = INFO,
+                )
+                notify(buildNotification(if (phase == AssistPhase.Active) "正在被协助" else message))
             },
         )
         session = created
@@ -75,6 +93,7 @@ class AgentService : Service() {
         session?.stop()
         session = null
         STATE = "已结束协助"
+        _state.value = AgentUiState(phase = AssistPhase.Idle, detail = "已结束协助")
     }
 
     private fun notify(notification: Notification) {
@@ -136,6 +155,20 @@ class AgentService : Service() {
         @Volatile
         var INFO: AgentSession.SessionInfo? = null
             private set
+
+        private val _state = MutableStateFlow(AgentUiState())
+
+        /** 界面直接订阅这个状态流；服务是唯一事实来源。 */
+        val state: StateFlow<AgentUiState> = _state.asStateFlow()
+
+        /** 让界面能主动进入出错态（例如 Shizuku 未运行）。 */
+        fun reportError(message: String) {
+            _state.value = _state.value.copy(
+                phase = AssistPhase.Error,
+                detail = message,
+                error = message,
+            )
+        }
 
         fun start(context: Context) {
             val intent = Intent(context, AgentService::class.java).setAction(ACTION_START)

@@ -28,6 +28,7 @@ class AgentSession(
     private val launcher: ServerLauncher,
     private val onState: (String) -> Unit,
     private val onReady: (SessionInfo) -> Unit,
+    private val onPhase: (AssistPhase, String) -> Unit = { _, _ -> },
 ) {
 
     private var proxy: AgentProxy? = null
@@ -42,6 +43,7 @@ class AgentSession(
 
     fun start(maxSize: Int = 720, maxFps: Int = 30, bitRate: Int = 2_000_000) {
         if (!started.compareAndSet(false, true)) return
+        onPhase(AssistPhase.Preparing, "正在准备…")
 
         state("准备引擎文件…")
         val jar = try {
@@ -94,8 +96,16 @@ class AgentSession(
         val token = PairingStore(context).token()
         val p = AgentProxy(engineStreams, token, deviceName = agentDisplayName())
         proxy = p
+        // 控制端接入 / 断开 → 长辈端状态随之切换（"正在被协助"必须真实可见）
+        p.onClientChanged = { connected ->
+            onPhase(
+                if (connected) AssistPhase.Active else AssistPhase.Ready,
+                if (connected) "正在被协助" else "已准备好，等待家人连接",
+            )
+        }
         val (controlPort, videoPort) = p.start()
         state("已就绪")
+        onPhase(AssistPhase.Ready, "已准备好，等待家人连接")
         onReady(SessionInfo(controlPort, videoPort, token, scidHex))
     }
 
@@ -130,6 +140,7 @@ class AgentSession(
         engine = null
         runCatching { launcher.unbind() }
         state("已结束协助")
+        onPhase(AssistPhase.Idle, "已结束协助")
     }
 
     fun engineOutput(): String = runCatching { engine?.recentOutput() ?: "" }.getOrDefault("")
@@ -137,6 +148,14 @@ class AgentSession(
     /** 控制端在发现阶段看到的名字；长辈端部署时可用设置覆盖（M4）。 */
     private fun agentDisplayName(): String =
         android.os.Build.MODEL ?: "Android 设备"
+
+    /** 把底层原因翻成长辈能看懂的一句话（不出现错误码）。 */
+    private fun humanize(raw: String): String = when {
+        raw.contains("Shizuku", ignoreCase = true) -> "权限丢失了，需要家人重新设置一次"
+        raw.contains("引擎", ignoreCase = true) -> "协助暂时用不了，可能是系统更新了"
+        raw.contains("网络", ignoreCase = true) -> "网络没连上，请检查家里的 Wi-Fi"
+        else -> "出了点问题，请让家人看看"
+    }
 
     private fun state(message: String) {
         Log.i(TAG, message)
@@ -147,6 +166,7 @@ class AgentSession(
         Log.e(TAG, message, t)
         started.set(false)
         onState("失败：$message")
+        onPhase(AssistPhase.Error, humanize(message))
         stop()
     }
 

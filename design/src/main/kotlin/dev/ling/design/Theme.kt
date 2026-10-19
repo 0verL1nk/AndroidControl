@@ -1,4 +1,4 @@
-package dev.ling.controller.ui
+package dev.ling.design
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -46,7 +46,7 @@ object Tokens {
 }
 
 @Composable
-fun ControllerTheme(
+fun AppTheme(
     dark: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {

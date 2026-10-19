@@ -22,6 +22,9 @@ class AgentProxy(
     private val deviceName: String = android.os.Build.MODEL ?: "Android 设备",
 ) {
 
+    /** 控制端接入/断开回调，用来驱动长辈端"正在被协助"的可见状态。 */
+    var onClientChanged: ((Boolean) -> Unit)? = null
+
     private val running = AtomicBoolean(false)
     private val fanout = VideoFanout(streams.videoIn)
 
@@ -78,6 +81,7 @@ class AgentProxy(
                         Log.w(TAG, "流头尚未就绪，拒绝本次连接")
                         return@use
                     }
+                    onClientChanged?.invoke(true)
                     try {
                         // 读一点就丢：用于感知对端断开
                         val probe = ByteArray(256)
@@ -85,6 +89,7 @@ class AgentProxy(
                     } catch (_: Throwable) {
                     } finally {
                         fanout.detach(out)
+                        onClientChanged?.invoke(false)
                     }
                 }
             }.apply { isDaemon = true; name = "video-client"; start() }

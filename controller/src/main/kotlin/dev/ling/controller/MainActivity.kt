@@ -19,7 +19,7 @@ import dev.ling.controller.core.Discovery
 import dev.ling.controller.store.DeviceStore
 import dev.ling.controller.ui.ConnectScreen
 import dev.ling.controller.ui.ControlScreen
-import dev.ling.controller.ui.ControllerTheme
+import dev.ling.design.AppTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            ControllerTheme {
+            AppTheme {
                 App()
             }
         }

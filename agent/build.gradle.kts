@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.compose.compiler)
 }
 
 // AGP 9 起 Kotlin 支持内置（android.builtInKotlin 默认 true），
@@ -33,6 +34,7 @@ android {
     // UserService 需要跨进程接口
     buildFeatures {
         aidl = true
+        compose = true
         // AGP 8 起 BuildConfig 默认不生成，这里显式打开（探针里用 BuildConfig.DEBUG）
         buildConfig = true
     }
@@ -44,6 +46,12 @@ android {
 }
 
 dependencies {
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons)
+    implementation(libs.compose.activity)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.lifecycle.service)
@@ -54,4 +62,5 @@ dependencies {
     implementation(libs.shizuku.provider)
 
     implementation(project(":protocol"))
+    implementation(project(":design"))
 }
