@@ -244,3 +244,36 @@ Caused by: java.lang.NullPointerException: Attempt to invoke virtual method
 
 架构上最关键的不确定性（免 root 拿 shell、跨域传流、协议对接、注入生效）已全部消除。
 剩下的都是常规工程量：控制端 App、适配 UI、保活与自启、公网稳定性。
+
+## R13. M1 主链路在"两机分离"下验证通过【实测 2026-10-19】
+
+配置：**模拟器（控制端）** → 宿主机中继 → **真机 Redmi K60 Ultra（长辈端）**。
+（模拟器自身网络被宿主机 TUN 干扰，用 `adb reverse` + `tools/tcp-relay.py` 绕过，
+这不影响被测链路本身。）
+
+| 验证项 | 结果 |
+|---|---|
+| 跨设备连接 | 控制端连上长辈端，握手通过 |
+| 视频解码渲染 | 设备名 `23078RKD5C`、`h264`、320x720，**首帧上屏**，控制端看到的是真机画面 |
+| 性能 | 静态画面 1.7 fps、网络 RTT 95ms（含宿主机中继）、质量"优秀" |
+| **触摸注入（经控制端 UI）** | 在控制端画面点击后，**真机截图哈希改变**，注入真实生效 |
+| 长辈端状态联动 | `Preparing → Ready → Active（正在被协助）`，由真实连接驱动 |
+
+### 途中修复的问题（都已写入代码注释与契约文档）
+
+1. **控制端握手用 `BufferedReader` 预读**，把紧随 `OK\n` 的视频流头部吞掉，
+   导致"设备名乱码、永远解不出帧"。改为逐字节读到换行。
+2. **联发科解码器不吃 CODEC_CONFIG 缓冲**：必须等"尺寸 + 配置包"齐备后建解码器，
+   并把 SPS/PPS 放进 `MediaFormat` 的 `csd-0/csd-1`，否则报 `CSD is not calculated` 且不出帧。
+3. **后接入的客户端拿不到 IDR**：引擎开头的关键帧早已过去，画面静止时不再产生帧。
+   解法是发 scrcpy 的 `RESET_VIDEO`（控制消息 type=17）让引擎重新编码。
+4. **前台服务是必须的**：长辈端退到后台后，普通进程会被系统冻结、会话中断；
+   `AgentService` 常驻通知后会话稳定。
+
+### 模拟器在本机的坑（供后来者参考）
+
+- 宿主机跑着 TUN 模式的代理时，模拟器 `eth0/wlan0` 起不来（`ip route` 为空）。
+  用 `adb reverse` 即可绕过，不影响测试。
+- Play Store 镜像的 `/data` 只有 774M，装不下就报 `not enough space`；
+  在 AVD 的 `config.ini` 里把 `disk.dataPartition.size` 调到 6G 并 `-wipe-data` 重启。
+- 无窗口模式（`-no-window -gpu swiftshader_indirect`）比带窗口稳定得多。
