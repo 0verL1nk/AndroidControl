@@ -55,6 +55,10 @@ class EngineService : IEngineService.Stub() {
         if (serverSocket == null) return "尚未 prepareServer"
         if (!java.io.File(jarPath).canRead()) return "引擎文件不可读：$jarPath"
 
+        // 应用被强杀时 UserService 进程会成为孤儿，残留的引擎会继续占用采集资源。
+        // 每次启动前清一遍，保证只有一个引擎在跑。
+        killStaleEngines()
+
         val args = listOf(
             "/system/bin/app_process",
             "/",
@@ -83,6 +87,13 @@ class EngineService : IEngineService.Stub() {
         } catch (t: Throwable) {
             Log.e(TAG, "引擎启动失败", t)
             "启动失败：${t.javaClass.simpleName}: ${t.message}"
+        }
+    }
+
+    private fun killStaleEngines() {
+        runCatching {
+            ProcessBuilder("/system/bin/sh", "-c", "pkill -f com.genymobile.scrcpy.Server")
+                .start().waitFor()
         }
     }
 

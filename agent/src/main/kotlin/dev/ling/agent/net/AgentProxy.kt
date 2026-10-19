@@ -77,6 +77,13 @@ class AgentProxy(
                 socket.use { s ->
                     val out = s.getOutputStream()
                     if (!authenticate(s.inputStream, out, "AUTH")) return@use
+                    // 单会话：已经有人在看了就明确拒绝，而不是把画面抢过来
+                    // （悄悄抢流会让前一个控制端画面无声卡住，很难排查）
+                    if (fanout.hasClient) {
+                        Log.w(TAG, "已有控制端在接收，拒绝新的视频连接")
+                        runCatching { out.write(BUSY_REPLY.toByteArray()); out.flush() }
+                        return@use
+                    }
                     if (!fanout.attach(out)) {
                         Log.w(TAG, "流头尚未就绪，拒绝本次连接")
                         return@use
@@ -208,6 +215,9 @@ class AgentProxy(
 
         /** 视频通道端口（隧道内固定）。 */
         const val VIDEO_PORT = 27186
+
+        /** 单会话时的拒绝应答。 */
+        private const val BUSY_REPLY = "BUSY\n"
 
         /** 发现用握手词：只报告信息。 */
         const val PROBE_VERB = "PROBE"

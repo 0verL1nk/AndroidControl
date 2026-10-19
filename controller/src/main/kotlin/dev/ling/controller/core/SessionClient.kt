@@ -76,6 +76,7 @@ class SessionClient(
     }
 
     private fun handshakeReason(reply: String): String = when {
+        reply == "BUSY" -> "已有其他人在看这台手机"
         reply == "ERR" -> "口令不正确"
         reply.isEmpty() -> "对方没有响应"
         else -> "连接被拒绝（$reply）"
