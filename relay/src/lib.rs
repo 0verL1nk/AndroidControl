@@ -40,9 +40,12 @@ use tokio::sync::{mpsc, oneshot};
 pub const AGENT_VERB: &str = "AGENT";
 pub const DATA_VERB: &str = "DATA";
 pub const FIND_VERB: &str = "FIND";
+pub const ASK_VERB: &str = "ASK";
 
 pub const ROLE_CONTROL: &str = "control";
 pub const ROLE_VIDEO: &str = "video";
+/// 双向语音：一条连接同时承载两个方向的 PCM 帧。
+pub const ROLE_AUDIO: &str = "audio";
 
 /// 双方约定的心跳间隔。
 pub const PING_INTERVAL: Duration = Duration::from_secs(10);
@@ -51,11 +54,14 @@ pub const SIGNALING_TIMEOUT: Duration = Duration::from_secs(35);
 /// 等长辈端开出数据连接的最长时间（移动网络要留余量）。
 pub const DATA_TIMEOUT: Duration = Duration::from_secs(12);
 
+/// 求助的有效期：过了就当作没按过，避免孩子几小时后打开 App 被吓一跳。
+const HELP_TTL_SECS: u64 = 30 * 60;
+
 /// 首行协议行的长度上限，防止坏连接把内存撑爆。
 const LINE_LIMIT: usize = 256;
 
 fn is_role(value: &str) -> bool {
-    value == ROLE_CONTROL || value == ROLE_VIDEO
+    value == ROLE_CONTROL || value == ROLE_VIDEO || value == ROLE_AUDIO
 }
 
 /// 日志：节点上交给 journald 收集，这里只保证按行、带时间。
@@ -95,6 +101,8 @@ struct Waiting {
 pub struct Registry {
     signaling: HashMap<String, SignalTx>,
     waiting: HashMap<(String, String), Waiting>,
+    /// 长辈端按下"求助"的时间（Unix 秒）。
+    help: HashMap<String, u64>,
     next_id: u64,
 }
 
@@ -168,8 +176,34 @@ pub async fn handle_connection(
             handle_controller(rd, wr, parts[1].to_string(), parts[2].to_string(), peer, registry)
                 .await;
         }
+        ASK_VERB if parts.len() == 2 => {
+            handle_ask(wr, parts[1].to_string(), registry).await;
+        }
         _ => log(format!("无法识别的请求：{line:?} 来自 {peer}")),
     }
+}
+
+/// 控制端查询"长辈最近有没有按求助"。回复 `HELP <Unix 秒>` 或 `NONE`。
+async fn handle_ask(mut wr: OwnedWriteHalf, hash: String, registry: Arc<Mutex<Registry>>) {
+    let now = epoch_secs();
+    let reply = {
+        let mut reg = lock(&registry);
+        match reg.help.get(&hash).copied() {
+            Some(at) if now.saturating_sub(at) <= HELP_TTL_SECS => format!("HELP {at}\n"),
+            _ => {
+                reg.help.remove(&hash);
+                "NONE\n".to_string()
+            }
+        }
+    };
+    let _ = wr.write_all(reply.as_bytes()).await;
+}
+
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// 常驻信令连接：处理心跳，并在控制端到来时通知长辈端开流。
@@ -217,8 +251,19 @@ async fn handle_signaling(
             },
             line = lines.next_line() => match line {
                 Ok(Some(text)) => {
-                    if text.trim() == "PING" && wr.write_all(b"PONG\n").await.is_err() {
-                        break;
+                    match text.trim() {
+                        "PING" => {
+                            if wr.write_all(b"PONG\n").await.is_err() {
+                                break;
+                            }
+                        }
+                        "HELP" => {
+                            // 长辈端按下"求助"：记下时间，控制端下次查询时就能看到。
+                            let now = epoch_secs();
+                            lock(&registry).help.insert(hash.clone(), now);
+                            log(format!("收到求助（{}…）", short(&hash)));
+                        }
+                        other => log(format!("信令上收到未知消息：{other}")),
                     }
                 }
                 _ => break,
@@ -405,6 +450,7 @@ mod tests {
     fn only_known_roles_are_accepted() {
         assert!(is_role("control"));
         assert!(is_role("video"));
+        assert!(is_role("audio"));
         assert!(!is_role("screen"));
         assert!(!is_role(""));
     }

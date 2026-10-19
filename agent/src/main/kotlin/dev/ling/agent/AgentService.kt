@@ -7,12 +7,15 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.util.Log
 import dev.ling.agent.launcher.ShizukuLauncher
 import dev.ling.agent.session.AgentSession
 import dev.ling.agent.session.AgentUiState
 import dev.ling.agent.session.AssistPhase
+import dev.ling.agent.trust.PairingStore
+import dev.ling.agent.ui.Announcer
 import dev.ling.agent.ui.ControlIndicator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,12 +34,38 @@ class AgentService : Service() {
 
     private var session: AgentSession? = null
     private var indicator: ControlIndicator? = null
+    private var announcer: Announcer? = null
+    private var lastPhase: AssistPhase? = null
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("正在准备协助…"))
+        startAsForeground(withMicrophone = true)
         indicator = ControlIndicator(this)
+        announcer = Announcer(this)
+    }
+
+    /**
+     * 以"屏幕提示 + 麦克风"两种类型进入前台。
+     *
+     * 语音需要 `microphone` 类型：否则应用退到后台后，"仅在使用中允许"的录音权限
+     * 会被系统收回，孩子那边就只能单向说话。
+     * 但从开机自启（后台）启动时，系统不允许带上麦克风类型，
+     * 所以失败就退回 `specialUse`——协助本身不受影响，只是语音要等应用可见后重试。
+     */
+    private fun startAsForeground(withMicrophone: Boolean) {
+        val notification = buildNotification("正在准备协助…")
+        val specialUse = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        val types = if (withMicrophone) {
+            specialUse or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        } else {
+            specialUse
+        }
+        runCatching { startForeground(NOTIFICATION_ID, notification, types) }
+            .onFailure { error ->
+                Log.w(TAG, "前台服务类型 $types 启动失败，退回 specialUse：${error.message}")
+                runCatching { startForeground(NOTIFICATION_ID, notification, specialUse) }
+            }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -45,6 +74,15 @@ class AgentService : Service() {
                 stopSession()
                 stopSelf()
                 return START_NOT_STICKY
+            }
+            ACTION_ROTATE -> {
+                // 换码即作废旧配对：重启会话会让中继按新哈希重新登记，
+                // 正在进行的会话也会断开（这正是"怀疑泄露"时应有的效果）。
+                val fresh = PairingStore(this).resetToken()
+                Log.i(TAG, "配对码已轮换：$fresh")
+                stopSession()
+                startSession()
+                return START_STICKY
             }
         }
         startSession()
@@ -60,6 +98,8 @@ class AgentService : Service() {
             indicator?.hide()
             indicator = null
         }
+        announcer?.release()
+        announcer = null
         super.onDestroy()
     }
 
@@ -96,11 +136,39 @@ class AgentService : Service() {
                 mainHandler.post {
                     if (phase == AssistPhase.Active) indicator?.show() else indicator?.hide()
                 }
+                // 状态变化时播报一句：长辈不一定看着屏幕，但听得到
+                when {
+                    phase == AssistPhase.Active && lastPhase != AssistPhase.Active ->
+                        announcer?.announce("家人已连接，正在看你的手机")
+                    phase == AssistPhase.Ready && lastPhase == AssistPhase.Active ->
+                        announcer?.announce("家人已断开")
+                }
+                lastPhase = phase
+            },
+            onSensitivePage = { packageName ->
+                // 回调来自轮询线程，窗口与通知都要回主线程处理
+                mainHandler.post {
+                    if (packageName == null) {
+                        if (_state.value.phase == AssistPhase.Active) {
+                            indicator?.show(ControlIndicator.Mode.ASSISTED)
+                        }
+                    } else {
+                        val label = appLabel(packageName)
+                        indicator?.show(ControlIndicator.Mode.SENSITIVE, label)
+                        notify(buildNotification("敏感页面：$label"))
+                    }
+                }
             },
         )
         session = created
         created.start()
     }
+
+    /** 包名 → 应用名，给长辈看人话而不是包名。 */
+    private fun appLabel(packageName: String): String = runCatching {
+        val pm = packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
+    }.getOrDefault(packageName)
 
     private fun stopSession() {
         indicator?.hide()
@@ -168,6 +236,7 @@ class AgentService : Service() {
 
         const val ACTION_START = "dev.ling.agent.action.START"
         const val ACTION_STOP = "dev.ling.agent.action.STOP"
+        const val ACTION_ROTATE = "dev.ling.agent.action.ROTATE"
 
         /** 供界面读取的当前状态（服务跨进程不可见，这里用进程内共享）。 */
         @Volatile
@@ -200,6 +269,13 @@ class AgentService : Service() {
         fun stop(context: Context) {
             val intent = Intent(context, AgentService::class.java).setAction(ACTION_STOP)
             context.startService(intent)
+        }
+
+        /** 换一个新配对码，并让中继按新哈希重新登记。 */
+        fun rotateToken(context: Context) {
+            context.startForegroundService(
+                Intent(context, AgentService::class.java).setAction(ACTION_ROTATE),
+            )
         }
     }
 }

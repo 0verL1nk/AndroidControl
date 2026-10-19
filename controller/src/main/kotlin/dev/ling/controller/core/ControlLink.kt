@@ -81,6 +81,12 @@ class ControlLink(private val device: DeviceInfo) {
 
     fun requestKeyFrame() = send { it.requestKeyFrame() }
 
+    /**
+     * 点亮对方屏幕。KEYCODE_WAKEUP 在屏幕已经亮着时是空操作，
+     * 所以可以放心在每次连上、以及用户点"唤醒"时发送。
+     */
+    fun wakeScreen() = send { it.key(ControlChannel.Keys.WAKEUP) }
+
     private fun send(action: (ControlChannel) -> Unit) {
         val target = channel ?: return
         lastSendAt = System.currentTimeMillis()

@@ -1,6 +1,7 @@
 package dev.ling.agent.net
 
 import android.util.Log
+import dev.ling.audio.VoiceSession
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
@@ -30,6 +31,9 @@ class AgentProxy(
 
     /** 当前控制客户端；引擎回传的设备消息只写给"现在这个"。 */
     private val controlSink = java.util.concurrent.atomic.AtomicReference<OutputStream?>(null)
+
+    /** 当前是否有控制端。用于只在"有人正在看"时才轮询屏幕相关内容。 */
+    val hasController: Boolean get() = controlSink.get() != null
 
     private var videoServer: ServerSocket? = null
     private var controlServer: ServerSocket? = null
@@ -83,30 +87,37 @@ class AgentProxy(
             Thread {
                 socket.use { s ->
                     val out = s.getOutputStream()
-                    if (!authenticate(s.inputStream, out, "AUTH")) return@use
-                    // 单会话：已经有人在看了就明确拒绝，而不是把画面抢过来
-                    // （悄悄抢流会让前一个控制端画面无声卡住，很难排查）
-                    if (fanout.hasClient) {
-                        Log.w(TAG, "已有控制端在接收，拒绝新的视频连接")
-                        runCatching { out.write(BUSY_REPLY.toByteArray()); out.flush() }
-                        return@use
-                    }
-                    if (!fanout.attach(out)) {
-                        Log.w(TAG, "流头尚未就绪，拒绝本次连接")
-                        return@use
-                    }
-                    onClientChanged?.invoke(true)
-                    try {
-                        // 读一点就丢：用于感知对端断开
-                        val probe = ByteArray(256)
-                        while (running.get() && s.inputStream.read(probe) >= 0) Unit
-                    } catch (_: Throwable) {
-                    } finally {
-                        fanout.detach(out)
-                        onClientChanged?.invoke(false)
+                    when (authenticate(s.inputStream, out)) {
+                        VERB_VIDEO -> acceptVideoClient(s, out)
+                        else -> Unit
                     }
                 }
             }.apply { isDaemon = true; name = "video-client"; start() }
+        }
+    }
+
+    private fun acceptVideoClient(s: java.net.Socket, out: OutputStream) {
+        val fanout = this.fanout
+        // 单会话：已经有人在看了就明确拒绝，而不是把画面抢过来
+        // （悄悄抢流会让前一个控制端画面无声卡住，很难排查）
+        if (fanout.hasClient) {
+            Log.w(TAG, "已有控制端在接收，拒绝新的视频连接")
+            runCatching { out.write(BUSY_REPLY.toByteArray()); out.flush() }
+            return
+        }
+        if (!fanout.attach(out)) {
+            Log.w(TAG, "流头尚未就绪，拒绝本次连接")
+            return
+        }
+        onClientChanged?.invoke(true)
+        try {
+            // 读一点就丢：用于感知对端断开
+            val probe = ByteArray(256)
+            while (running.get() && s.inputStream.read(probe) >= 0) Unit
+        } catch (_: Throwable) {
+        } finally {
+            fanout.detach(out)
+            onClientChanged?.invoke(false)
         }
     }
 
@@ -120,13 +131,19 @@ class AgentProxy(
             Thread {
                 socket.use { s ->
                     val out = s.getOutputStream()
-                    if (!authenticate(s.inputStream, out, "HELLO")) return@use
-                    controlSink.set(out)
-                    try {
-                        pump(s.inputStream, streams.controlOut)
-                    } finally {
-                        controlSink.compareAndSet(out, null)
-                        Log.i(TAG, "控制连接结束")
+                    when (authenticate(s.inputStream, out)) {
+                        VERB_CONTROL -> {
+                            controlSink.set(out)
+                            try {
+                                pump(s.inputStream, streams.controlOut)
+                            } finally {
+                                controlSink.compareAndSet(out, null)
+                                Log.i(TAG, "控制连接结束")
+                            }
+                        }
+                        VERB_AUDIO -> runCatching { VoiceSession(s).run() }
+                            .onFailure { Log.w(TAG, "语音通道异常：${it.message}") }
+                        else -> Unit
                     }
                 }
             }.apply { isDaemon = true; name = "control-client"; start() }
@@ -152,19 +169,21 @@ class AgentProxy(
     }
 
     /**
-     * 首个握手行有三种可能：
+     * 首个握手行有四种可能：
      * - `PROBE`            → 控制端在扫描局域网，回一句设备描述即可（不需要口令）
-     * - `HELLO <token>`    → 建立控制会话
-     * - `AUTH <token>`     → 建立视频通道
+     * - `FIND <哈希>`      → 控制端按口令找设备，回一句设备描述（不需要口令）
+     * - `HELLO <口令>`     → 建立控制会话
+     * - `AUTH <口令>`      → 建立视频通道
+     * - `AUDIO <口令>`     → 建立双向语音通道
      *
-     * PROBE 只在隧道内可达，且只暴露设备名，用来实现"打开就能连、不用手输地址"。
+     * @return 验证通过的动词；失败返回 null（连接由调用方关闭）。
      */
-    private fun authenticate(input: InputStream, output: OutputStream, verb: String): Boolean {
-        val line = readLine(input) ?: return false
+    private fun authenticate(input: InputStream, output: OutputStream): String? {
+        val line = readLine(input) ?: return null
         if (line.trim() == PROBE_VERB) {
             output.write(discoveryReply().toByteArray(Charsets.UTF_8))
             output.flush()
-            return false
+            return null
         }
 
         // `FIND <口令哈希>`：控制端只输入一次 6 位口令，靠它自动找到"是哪一台"。
@@ -175,14 +194,19 @@ class AgentProxy(
                 output.write(discoveryReply().toByteArray(Charsets.UTF_8))
                 output.flush()
             }
-            return false
+            return null
         }
+
         val parts = line.trim().split(' ')
-        val ok = parts.size == 2 && parts[0] == verb && parts[1] == token
+        val verb = parts.firstOrNull()
+        val ok = parts.size == 2 && verb in VERBS && parts[1] == token
         output.write(if (ok) "OK\n".toByteArray() else "ERR\n".toByteArray())
         output.flush()
-        if (!ok) Log.w(TAG, "鉴权失败：$line")
-        return ok
+        if (!ok) {
+            Log.w(TAG, "鉴权失败：$line")
+            return null
+        }
+        return verb
     }
 
     /**
@@ -252,5 +276,11 @@ class AgentProxy(
 
         /** 按口令找设备：`FIND <sha256(口令)>`。 */
         const val FIND_PREFIX = "FIND "
+
+        /** 三种会话动词：控制、视频、语音。 */
+        const val VERB_CONTROL = "HELLO"
+        const val VERB_VIDEO = "AUTH"
+        const val VERB_AUDIO = "AUDIO"
+        val VERBS = setOf(VERB_CONTROL, VERB_VIDEO, VERB_AUDIO)
     }
 }

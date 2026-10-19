@@ -73,7 +73,10 @@ class EngineService : IEngineService.Stub() {
             "max_size=$maxSize",
             "max_fps=$maxFps",
             "video_bit_rate=$bitRate",
+            // 协助期间屏幕保持常亮；连上的瞬间如果屏幕是熄的，也直接点亮——
+            // 长辈按了"开启协助"就是希望被看到，黑屏会让控制端以为连不上。
             "stay_awake=true",
+            "power_on=true",
         )
 
         return try {
@@ -98,8 +101,38 @@ class EngineService : IEngineService.Stub() {
     }
 
     override fun acceptVideo(): ParcelFileDescriptor = acceptOne("video")
-
     override fun acceptControl(): ParcelFileDescriptor = acceptOne("control")
+
+    /**
+     * 当前前台应用包名（敏感页面提示用）。
+     *
+     * 不同 ROM 的 dumpsys 字段不一样，两种最常见的形式各试一次；
+     * 都取不到就返回空串——调用方应把它当作"未知"，而不是"安全"。
+     */
+    override fun foregroundPackage(): String {
+        val commands = listOf(
+            "dumpsys window windows | grep -m1 mCurrentFocus",
+            "dumpsys activity activities | grep -m1 topResumedActivity",
+        )
+        for (command in commands) {
+            val output = runShellCommand(command) ?: continue
+            PACKAGE_PATTERN.find(output)?.groupValues?.get(1)?.let { return it }
+        }
+        return ""
+    }
+
+    private fun runShellCommand(command: String): String? = runCatching {
+        val process = ProcessBuilder("/system/bin/sh", "-c", command)
+            .redirectErrorStream(true)
+            .start()
+        // 先等进程结束（有硬超时）再读输出：`readText()` 会一直等到 EOF，
+        // 一旦 dumpsys 卡住，读操作就跟着卡死，整个轮询线程再无响应。
+        if (!process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            return@runCatching null
+        }
+        process.inputStream.bufferedReader().use { it.readText().take(MAX_OUTPUT) }
+    }.getOrNull()
 
     private fun acceptOne(label: String): ParcelFileDescriptor {
         val server = serverSocket ?: throw IllegalStateException("尚未 prepareServer")
@@ -174,5 +207,8 @@ class EngineService : IEngineService.Stub() {
         const val TAG = "AgentEngine"
         const val SCRCPY_VERSION = "5.0.1"
         const val MAX_OUTPUT = 8 * 1024
+
+        /** 从 `... u0 com.pkg/.Activity` 或 `Window{... com.pkg/com.pkg.Activity}` 里取包名。 */
+        val PACKAGE_PATTERN = Regex("""([a-zA-Z][\w.]*)/[\w.$]+""")
     }
 }

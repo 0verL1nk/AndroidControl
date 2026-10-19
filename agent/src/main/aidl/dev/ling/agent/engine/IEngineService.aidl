@@ -38,6 +38,12 @@ interface IEngineService {
     /** 引擎最近输出（用于界面展示与排障）。 */
     String recentOutput();
 
+    /**
+     * 当前前台应用包名，用于敏感页面（支付/银行）提示。
+     * 取不到时返回空串，调用方应把它当作"未知"而不是"安全"。
+     */
+    String foregroundPackage();
+
     /** 本服务进程的身份，便于自检（应为 uid=2000 shell）。 */
     String identity();
 }

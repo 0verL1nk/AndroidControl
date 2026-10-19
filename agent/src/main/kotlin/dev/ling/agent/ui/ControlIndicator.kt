@@ -31,13 +31,25 @@ import android.view.animation.LinearInterpolator
  */
 class ControlIndicator(private val context: Context) {
 
+    enum class Mode {
+        /** 正常被协助：蓝色荧光 */
+        ASSISTED,
+
+        /** 当前停留在支付/银行等敏感页面：红色荧光 + 明确文字 */
+        SENSITIVE,
+    }
+
     private var view: GlowBorderView? = null
     private var params: WindowManager.LayoutParams? = null
 
     val isShowing: Boolean get() = view != null
 
-    fun show() {
-        if (view != null) return
+    fun show(mode: Mode = Mode.ASSISTED, label: String? = null) {
+        view?.let {
+            // 已经在显示：只切换颜色与文案，不重复添加窗口
+            it.setMode(mode, label)
+            return
+        }
         if (!canDrawOverlays()) {
             Log.w(TAG, "没有悬浮窗权限，无法显示被协助提示")
             return
@@ -45,6 +57,7 @@ class ControlIndicator(private val context: Context) {
 
         val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val glow = GlowBorderView(context)
+        glow.setMode(mode, label)
         val layoutParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -106,7 +119,7 @@ class ControlIndicator(private val context: Context) {
             style = Paint.Style.FILL
             color = GLOW_COLOR
         }
-        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val textPaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             textSize = dp(15f)
             isFakeBoldText = true
@@ -114,6 +127,20 @@ class ControlIndicator(private val context: Context) {
 
         private var phase = 0f
         private var animator: ValueAnimator? = null
+
+        private var mode = Mode.ASSISTED
+        private var sensitiveLabel: String? = null
+
+        fun setMode(newMode: Mode, label: String?) {
+            mode = newMode
+            sensitiveLabel = label
+            val accent = if (newMode == Mode.SENSITIVE) SENSITIVE_COLOR else GLOW_COLOR
+            borderPaint.color = accent
+            glowPaint.color = accent
+            dotPaint.color = accent
+            chipPaint.color = if (newMode == Mode.SENSITIVE) SENSITIVE_CHIP else CHIP_BACKGROUND
+            invalidate()
+        }
 
         fun start() {
             animator = ValueAnimator.ofFloat(0f, 1f).apply {
@@ -154,14 +181,33 @@ class ControlIndicator(private val context: Context) {
 
         /** 顶部状态条：图标（圆点）+ 文字，避免只靠颜色表达状态。 */
         private fun drawStatusChip(canvas: Canvas, alpha: Int) {
-            val label = "正在被协助"
-            val textWidth = textPaint.measureText(label)
+            val rawLabel = when (mode) {
+                Mode.ASSISTED -> "正在被协助"
+                Mode.SENSITIVE -> sensitiveLabel?.let { "敏感页面 · $it" } ?: "敏感页面 · 请注意"
+            }
+            val textWidth = textPaint.measureText(rawLabel)
             val paddingH = dp(14f)
             val chipHeight = dp(30f)
             val dotSize = dp(8f)
             val gap = dp(8f)
 
-            val chipWidth = paddingH * 2 + dotSize + gap + textWidth
+            // 应用名可能很长（尤其是包名回退），先算出能用的最大文字宽度，
+            // 超了就省略——状态条绝不能超出屏幕。
+            val chrome = paddingH * 2 + dotSize + gap + dp(24f)
+            val maxTextWidth = (width - chrome).coerceAtLeast(dp(80f))
+            val label = if (textWidth > maxTextWidth) {
+                android.text.TextUtils.ellipsize(
+                    rawLabel,
+                    textPaint,
+                    maxTextWidth,
+                    android.text.TextUtils.TruncateAt.END,
+                ).toString()
+            } else {
+                rawLabel
+            }
+            val labelWidth = textPaint.measureText(label)
+
+            val chipWidth = paddingH * 2 + dotSize + gap + labelWidth
             val left = (width - chipWidth) / 2f
             val top = dp(16f)
             val rect = RectF(left, top, left + chipWidth, top + chipHeight)
@@ -187,5 +233,9 @@ class ControlIndicator(private val context: Context) {
         val GLOW_COLOR = Color.parseColor("#4C8DFF")
 
         val CHIP_BACKGROUND = Color.parseColor("#CC0B57D0")
+
+        /** 敏感页面：红，与"出错"同色系，但语义由文字承担。 */
+        val SENSITIVE_COLOR = Color.parseColor("#F04438")
+        val SENSITIVE_CHIP = Color.parseColor("#CCB42318")
     }
 }

@@ -4,10 +4,11 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
 
-/** 两条流：控制（双向输入）与视频（下行画面）。 */
+/** 三条流：控制（双向输入）、视频（下行画面）、语音（双向 PCM）。 */
 enum class Role(val wire: String) {
     Control("control"),
     Video("video"),
+    Audio("audio"),
 }
 
 /**
@@ -30,9 +31,14 @@ object Channels {
     }
 
     private fun openDirect(device: DeviceInfo, role: Role, timeoutMs: Int): Socket {
-        val port = if (role == Role.Control) device.controlPort else device.videoPort
+        // 语音和控制共用长辈端的一个端口，靠握手动词区分
+        val port = if (role == Role.Video) device.videoPort else device.controlPort
         val socket = connect(device.host, port, timeoutMs)
-        val verb = if (role == Role.Control) "HELLO" else "AUTH"
+        val verb = when (role) {
+            Role.Control -> "HELLO"
+            Role.Video -> "AUTH"
+            Role.Audio -> "AUDIO"
+        }
         val reply = handshake(socket, "$verb ${device.token}")
         if (reply != "OK") {
             socket.close()

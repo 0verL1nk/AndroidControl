@@ -57,6 +57,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.ling.controller.core.DeviceInfo
+import dev.ling.controller.core.HelpProbe
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -83,6 +87,20 @@ fun ConnectScreen(
 ) {
     var token by remember { mutableStateOf("") }
     var settingsOpen by remember { mutableStateOf(false) }
+    var helpAt by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+
+    // 打开就能看到"长辈按过求助"：每隔一会儿问一次中继，不需要长辈端在线
+    LaunchedEffect(devices) {
+        if (devices.isEmpty()) return@LaunchedEffect
+        while (true) {
+            helpAt = withContext(Dispatchers.IO) {
+                devices.mapNotNull { device ->
+                    HelpProbe.lastHelpAt(device)?.let { device.token to it }
+                }.toMap()
+            }
+            delay(20_000)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -186,7 +204,7 @@ fun ConnectScreen(
             )
             Spacer(Modifier.height(10.dp))
             devices.sortedByDescending { it.lastUsedAt }.forEach { device ->
-                DeviceCard(device, busy, onConnectDevice, onForget)
+                DeviceCard(device, busy, onConnectDevice, onForget, helpAt[device.token])
                 Spacer(Modifier.height(10.dp))
             }
         }
@@ -328,6 +346,7 @@ private fun DeviceCard(
     busy: Boolean,
     onConnect: (DeviceInfo) -> Unit,
     onForget: (DeviceInfo) -> Unit,
+    helpAt: Long? = null,
 ) {
     Card(
         onClick = { onConnect(device) },
@@ -377,6 +396,14 @@ private fun DeviceCard(
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (helpAt != null) {
+                    Text(
+                        helpAgo(helpAt),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
 
             IconButton(onClick = { onForget(device) }) {
@@ -394,6 +421,16 @@ private fun DeviceCard(
                 modifier = Modifier.size(20.dp),
             )
         }
+    }
+}
+
+/** 求助时间 → 人话（"长辈刚刚按了求助"）。 */
+private fun helpAgo(at: Long): String {
+    val minutes = (System.currentTimeMillis() - at) / 60_000
+    return when {
+        minutes < 1 -> "长辈刚刚按了求助"
+        minutes < 60 -> "长辈 $minutes 分钟前按了求助"
+        else -> "长辈 ${minutes / 60} 小时前按了求助"
     }
 }
 

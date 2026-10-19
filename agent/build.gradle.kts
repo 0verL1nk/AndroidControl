@@ -62,5 +62,6 @@ dependencies {
     implementation(libs.shizuku.provider)
 
     implementation(project(":protocol"))
+    implementation(project(":audio"))
     implementation(project(":design"))
 }

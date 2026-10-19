@@ -85,7 +85,7 @@ async fn pairs_controller_with_agent_and_relays_bytes_both_ways() {
 }
 
 #[tokio::test]
-async fn video_and_control_are_separate_streams() {
+async fn every_role_is_an_independent_stream() {
     let addr = start().await;
 
     let mut signaling = connect(addr).await;
@@ -95,7 +95,7 @@ async fn video_and_control_are_separate_streams() {
         .unwrap();
     assert_eq!(read_line_or_timeout(&mut signaling).await, "OK");
 
-    for role in ["control", "video"] {
+    for role in ["control", "video", "audio"] {
         let mut controller = connect(addr).await;
         controller
             .write_all(format!("FIND {HASH} {role}\n").as_bytes())
@@ -123,8 +123,32 @@ async fn video_and_control_are_separate_streams() {
 }
 
 #[tokio::test]
-async fn controller_gets_err_when_agent_is_offline() {
+async fn help_request_can_be_queried_by_controller() {
     let addr = start().await;
+
+    // 没按过求助时是 NONE
+    let mut ask = connect(addr).await;
+    ask.write_all(format!("ASK {HASH}\n").as_bytes()).await.unwrap();
+    assert_eq!(read_line_or_timeout(&mut ask).await, "NONE");
+
+    // 长辈端登录信令后按"求助"
+    let mut signaling = connect(addr).await;
+    signaling
+        .write_all(format!("AGENT {HASH} signaling\n").as_bytes())
+        .await
+        .unwrap();
+    assert_eq!(read_line_or_timeout(&mut signaling).await, "OK");
+    signaling.write_all(b"HELP\n").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let mut ask = connect(addr).await;
+    ask.write_all(format!("ASK {HASH}\n").as_bytes()).await.unwrap();
+    let reply = read_line_or_timeout(&mut ask).await;
+    assert!(reply.starts_with("HELP "), "实际回复：{reply}");
+}
+
+#[tokio::test]
+async fn controller_gets_err_when_agent_is_offline() {    let addr = start().await;
 
     let mut controller = connect(addr).await;
     controller

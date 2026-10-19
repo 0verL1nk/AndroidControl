@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
                     onStop = { AgentService.stop(this) },
                     onRetry = { requestAndStart() },
                     onOpenShizuku = { openShizuku() },
+                    onRotateToken = { AgentService.rotateToken(this) },
                 )
             }
         }
@@ -87,7 +88,14 @@ class MainActivity : ComponentActivity() {
 
     private fun startAssist() {
         requestOverlayIfNeeded()
+        requestAudioIfNeeded()
         AgentService.start(this)
+    }
+
+    /** 语音对讲需要麦克风；部署时授权一次即可，不拦路。 */
+    private fun requestAudioIfNeeded() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return
+        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 2002)
     }
 
     /**

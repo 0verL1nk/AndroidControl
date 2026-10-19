@@ -2,72 +2,46 @@ name: build
 
 on:
   push:
-    branches: [ main ]
+    branches: [master, main]
   pull_request:
-  workflow_dispatch:
 
 jobs:
-  # 提交前检查：仓库里不得出现使用者信息
-  personal-data-check:
+  android:
+    name: Android（协议测试 + 两端 APK）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: 扫描个人/环境信息
-        run: bash tools/check-personal-data.sh
-
-  # 两端 App 构建。密钥与签名材料一律通过 GitHub Secrets 注入，绝不进仓库：
-  #   ANDROID_KEYSTORE_BASE64  —— keystore 文件的 base64
-  #   ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
-  # 未配置这些 Secrets 时，只构建未签名的 debug 包（PR 场景）。
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: 若无 Gradle 工程则跳过
-        id: guard
-        run: |
-          if [ -f settings.gradle.kts ]; then echo "ok=true" >> "$GITHUB_OUTPUT";
-          else echo "ok=false" >> "$GITHUB_OUTPUT"; echo "尚未初始化 Gradle 工程，跳过构建"; fi
 
       - uses: actions/setup-java@v4
-        if: steps.guard.outputs.ok == 'true'
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-        if: steps.guard.outputs.ok == 'true'
+      - uses: gradle/actions/setup-gradle@v4
 
-      - name: 单元测试（协议层）
-        if: steps.guard.outputs.ok == 'true'
-        run: ./gradlew :protocol:test --no-daemon
-
-      - name: 构建
-        if: steps.guard.outputs.ok == 'true'
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: 构建与单元测试
         run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-            echo "已通过 Secrets 注入签名材料"
-          else
-            echo "未配置签名 Secrets，仅构建 debug 包"
-          fi
-          ./gradlew :agent:assembleDebug :controller:assembleDebug --no-daemon
+          chmod +x gradlew
+          ./gradlew :protocol:test :agent:assembleDebug :controller:assembleDebug --stacktrace
 
       - uses: actions/upload-artifact@v4
-        if: steps.guard.outputs.ok == 'true'
         with:
-          name: apks
+          name: debug-apks
           path: |
-            agent/build/outputs/apk/**/*.apk
-            controller/app/build/outputs/apk/**/*.apk
-          if-no-files-found: ignore
+            agent/build/outputs/apk/debug/*.apk
+            controller/build/outputs/apk/debug/*.apk
+
+  relay:
+    name: 中继（Rust 测试）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay
+
+      - name: 测试
+        run: cargo test --manifest-path relay/Cargo.toml

@@ -1,7 +1,12 @@
 package dev.ling.controller.ui
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -23,7 +28,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.LinkOff
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.VolumeDown
@@ -50,6 +58,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -58,6 +67,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.ling.controller.core.ControlChannel
 import dev.ling.controller.core.DeviceInfo
 import dev.ling.controller.core.RemoteSession
+import dev.ling.controller.core.VoiceLink
 
 /** 性能与连接状态，界面只读。 */
 data class SessionStats(
@@ -66,6 +76,7 @@ data class SessionStats(
     val rttMs: Long = -1,
     val idleSeconds: Int = 0,
     val reconnecting: Int? = null,
+    val reconnectMax: Int = 60,
     val failure: String? = null,
 )
 
@@ -85,6 +96,43 @@ fun ControlScreen(
     var showHud by remember { mutableStateOf(true) }
     var locked by remember { mutableStateOf(false) }
     var confirmDisconnect by remember { mutableStateOf(false) }
+    var voiceOn by remember { mutableStateOf(false) }
+    val voice = remember { VoiceLink(device) }
+    val context = LocalContext.current
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            voice.start()
+            voiceOn = true
+        } else {
+            toast(context, "需要麦克风权限才能语音")
+        }
+    }
+
+    DisposableEffect(Unit) {
+        voice.onState = { connected, reason ->
+            voiceOn = connected
+            if (!connected && reason != null) toast(context, reason)
+        }
+        onDispose { voice.stop() }
+    }
+
+    val toggleVoice: () -> Unit = {
+        when {
+            voiceOn -> {
+                voice.stop()
+                voiceOn = false
+            }
+            context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED -> {
+                voice.start()
+                voiceOn = true
+            }
+            else -> permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     val listener = remember {
         object : RemoteSession.Listener {
@@ -99,7 +147,7 @@ fun ControlScreen(
             }
 
             override fun onReconnecting(attempt: Int, max: Int) {
-                stats = stats.copy(reconnecting = attempt)
+                stats = stats.copy(reconnecting = attempt, reconnectMax = max)
             }
 
             override fun onFailed(reason: String) {
@@ -160,7 +208,15 @@ fun ControlScreen(
             },
         )
 
-        TopBar(device, stats, showHud) { showHud = !showHud }
+        TopBar(
+            device = device,
+            stats = stats,
+            showHud = showHud,
+            onToggleHud = { showHud = !showHud },
+            onWake = { session?.sendKey(ControlChannel.Keys.WAKEUP) },
+            voiceOn = voiceOn,
+            onToggleVoice = toggleVoice,
+        )
 
         if (showHud) {
             Hud(
@@ -189,7 +245,7 @@ fun ControlScreen(
                     CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp)
                     Spacer(Modifier.height(18.dp))
                     Text(
-                        "正在重连…（$attempt/15）",
+                        "正在重连…（$attempt/${stats.reconnectMax}）",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White,
@@ -245,14 +301,25 @@ fun ControlScreen(
 }
 
 @Composable
-private fun TopBar(device: DeviceInfo, stats: SessionStats, showHud: Boolean, onToggleHud: () -> Unit) {
+private fun TopBar(
+    device: DeviceInfo,
+    stats: SessionStats,
+    showHud: Boolean,
+    onToggleHud: () -> Unit,
+    onWake: () -> Unit,
+    voiceOn: Boolean,
+    onToggleVoice: () -> Unit,
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
-        modifier = Modifier.fillMaxWidth().height(38.dp).statusBarsPadding(),
+        modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+            modifier = Modifier
+                .statusBarsPadding()
+                .height(38.dp)
+                .padding(start = 12.dp, end = 4.dp),
         ) {
             Icon(
                 Icons.Rounded.Visibility,
@@ -273,6 +340,26 @@ private fun TopBar(device: DeviceInfo, stats: SessionStats, showHud: Boolean, on
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            IconButton(onClick = onToggleVoice, modifier = Modifier.size(34.dp)) {
+                Icon(
+                    if (voiceOn) Icons.Rounded.Mic else Icons.Rounded.MicOff,
+                    contentDescription = if (voiceOn) "关闭语音" else "开启语音",
+                    tint = if (voiceOn) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            IconButton(onClick = onWake, modifier = Modifier.size(34.dp)) {
+                Icon(
+                    Icons.Rounded.Lightbulb,
+                    contentDescription = "点亮对方屏幕",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
             IconButton(onClick = onToggleHud, modifier = Modifier.size(34.dp)) {
                 Icon(
                     if (showHud) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
@@ -381,6 +468,13 @@ private fun Scrim(content: @Composable () -> Unit) {
         modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)),
         contentAlignment = Alignment.Center,
     ) { content() }
+}
+
+/** Toast 必须在主线程；语音状态回调来自网络线程。 */
+private fun toast(context: Context, message: String) {
+    android.os.Handler(android.os.Looper.getMainLooper()).post {
+        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+    }
 }
 
 /** 质量分级用"文字 + 数值"双重编码，不单靠颜色。 */

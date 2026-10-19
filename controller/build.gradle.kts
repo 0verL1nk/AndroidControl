@@ -57,5 +57,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.service)
     implementation(libs.kotlinx.coroutines.android)
     implementation(project(":protocol"))
+    implementation(project(":audio"))
     implementation(project(":design"))
 }
