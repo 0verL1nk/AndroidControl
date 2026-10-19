@@ -106,6 +106,10 @@ class RelayClient(
         val up = Thread({ pump(a.getInputStream(), b.getOutputStream()) }, "relay-up")
             .apply { isDaemon = true; start() }
         pump(b.getInputStream(), a.getOutputStream())
+        // 任一方向结束就关掉两端：否则另一个方向会一直阻塞在读上，
+        // 会话结束后既不会退出也不会重新登记（实测踩到过：control 永远挂住）。
+        runCatching { a.close() }
+        runCatching { b.close() }
         up.interrupt()
     }
 

@@ -89,6 +89,7 @@ def _force_utf8_output() -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", required=True)
+    ap.add_argument("--relay", help="中继模式：填中继地址 host:port，程序用口令哈希去找设备")
     ap.add_argument("--token", required=True)
     ap.add_argument("--control-port", type=int, default=CONTROL_PORT)
     ap.add_argument("--video-port", type=int, default=VIDEO_PORT)
@@ -100,13 +101,27 @@ def main() -> int:
                     help="发送一次滑动")
     args = ap.parse_args()
 
-    print(f"→ 连接控制通道 {args.host}:{args.control_port}")
-    control = connect(args.host, args.control_port, "HELLO", args.token)
-    print("  控制通道 OK")
+    if args.relay:
+        # 中继模式：两台设备都在 NAT 后面时走这条。
+        # 只发口令哈希，中继负责把它和长辈端登记好的连接对接起来。
+        import hashlib
+        relay_host, _, relay_port_text = args.relay.partition(":")
+        relay_port = int(relay_port_text or "27180")
+        token_hash = hashlib.sha256(args.token.encode()).hexdigest()
 
-    print(f"→ 连接视频通道 {args.host}:{args.video_port}")
-    video = connect(args.host, args.video_port, "AUTH", args.token)
-    print("  视频通道 OK")
+        print(f"→ 通过中继 {relay_host}:{relay_port} 查找设备")
+        control = connect(relay_host, relay_port, f"FIND {token_hash}", "control")
+        print("  控制通道已配对")
+        video = connect(relay_host, relay_port, f"FIND {token_hash}", "video")
+        print("  视频通道已配对")
+    else:
+        print(f"→ 连接控制通道 {args.host}:{args.control_port}")
+        control = connect(args.host, args.control_port, "HELLO", args.token)
+        print("  控制通道 OK")
+
+        print(f"→ 连接视频通道 {args.host}:{args.video_port}")
+        video = connect(args.host, args.video_port, "AUTH", args.token)
+        print("  视频通道 OK")
 
     device_name = read_exact(video, 64).split(b"\x00")[0].decode(errors="replace")
     codec = read_exact(video, 4)
