@@ -9,13 +9,31 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.LinkOff
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.VolumeDown
+import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -32,8 +50,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.ling.controller.core.ControlChannel
 import dev.ling.controller.core.DeviceInfo
@@ -52,7 +72,7 @@ data class SessionStats(
 /**
  * 操控页：全屏画面 + 悬浮操作条。
  *
- * 安全边界常驻顶部（"正在控制 XX 的手机"），弱网时立刻盖遮罩并给出**可数进度**——
+ * 安全边界常驻顶部（"正在控制 XX 的手机"）；弱网时立刻盖遮罩并给出**可数进度**，
  * 不允许画面卡住却装作正常。
  */
 @Composable
@@ -140,116 +160,62 @@ fun ControlScreen(
             },
         )
 
-        // 顶部安全条：常驻，明确"正在控制谁"
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.TopCenter)
-                .height(40.dp),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 12.dp),
-            ) {
-                Text(
-                    "正在控制 " + device.name + " 的手机",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    fpsLabel(stats.fps) + " · " + rttShort(stats.rttMs),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                TextButton(onClick = { showHud = !showHud }) {
-                    Text(if (showHud) "隐藏浮层" else "显示浮层")
-                }
-            }
-        }
+        TopBar(device, stats, showHud) { showHud = !showHud }
 
         if (showHud) {
-            Surface(
-                color = Color.Black.copy(alpha = 0.55f),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 48.dp, end = 12.dp),
-            ) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    HudLine("帧率 " + fpsLabel(stats.fps))
-                    HudLine("码率 " + mbpsLabel(stats.kbps))
-                    HudLine("网络 " + rttShort(stats.rttMs))
-                    HudLine(qualityLabel(stats.rttMs))
-                    if (stats.idleSeconds >= 5) {
-                        HudLine("画面 ${stats.idleSeconds}s 未更新")
+            Hud(
+                stats,
+                Modifier.align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = 46.dp, end = 12.dp),
+            )
+        }
+
+        BottomBar(
+            locked = locked,
+            onBack = { session?.sendKey(ControlChannel.Keys.BACK) },
+            onHome = { session?.sendKey(ControlChannel.Keys.HOME) },
+            onRecents = { session?.sendKey(ControlChannel.Keys.APP_SWITCH) },
+            onVolumeUp = { session?.sendKey(ControlChannel.Keys.VOLUME_UP) },
+            onVolumeDown = { session?.sendKey(ControlChannel.Keys.VOLUME_DOWN) },
+            onToggleLock = { locked = !locked },
+            onDisconnect = { confirmDisconnect = true },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+
+        stats.reconnecting?.let { attempt ->
+            Scrim {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp)
+                    Spacer(Modifier.height(18.dp))
+                    Text(
+                        "正在重连…（$attempt/15）",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "网络不稳定，请稍候，无需操作",
+                        fontSize = 14.sp,
+                        color = Color.White.copy(alpha = 0.75f),
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    TextButton(onClick = { onExit(stats.failure) }) {
+                        Text("断开", fontSize = 14.sp, color = Color.White.copy(alpha = 0.8f))
                     }
                 }
             }
         }
 
-        // 底部悬浮操作条
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(64.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                BarButton("返回", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.BACK) }
-                BarButton("主页", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.HOME) }
-                BarButton("最近", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.APP_SWITCH) }
-                BarButton("音量+", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.VOLUME_UP) }
-                BarButton("音量-", Modifier.weight(1f)) { session?.sendKey(ControlChannel.Keys.VOLUME_DOWN) }
-                BarButton(if (locked) "已锁定" else "锁定", Modifier.weight(1f)) { locked = !locked }
-                BarButton("断开", Modifier.weight(1f), danger = true) { confirmDisconnect = true }
-            }
-        }
-
-        // 重连遮罩：给出可数进度，不装死
-        stats.reconnecting?.let { attempt ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.6f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Color.White)
-                    Text(
-                        "正在重连…（" + attempt + "/15）",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = Color.White,
-                        modifier = Modifier.padding(top = 16.dp),
-                    )
-                    Text(
-                        "网络不稳定，请稍候，无需操作",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = Color.White.copy(alpha = 0.8f),
-                    )
-                }
-            }
-        }
-
         stats.failure?.let { reason ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.7f)),
-                contentAlignment = Alignment.Center,
-            ) {
+            Scrim {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        reason,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = Color.White,
-                    )
-                    TextButton(onClick = { onExit(reason) }) { Text("返回") }
+                    Text(reason, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                    Spacer(Modifier.height(10.dp))
+                    TextButton(onClick = { onExit(reason) }) {
+                        Text("返回", fontSize = 15.sp, color = Color.White)
+                    }
                 }
             }
         }
@@ -262,8 +228,8 @@ fun ControlScreen(
     if (confirmDisconnect) {
         AlertDialog(
             onDismissRequest = { confirmDisconnect = false },
-            title = { Text("要断开连接吗？") },
-            text = { Text("断开后将无法继续操作对方手机") },
+            title = { Text("要断开连接吗？", fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
+            text = { Text("断开后将无法继续操作对方手机", fontSize = 15.sp) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDisconnect = false
@@ -279,38 +245,149 @@ fun ControlScreen(
 }
 
 @Composable
-private fun HudLine(text: String) {
-    Text(text, style = MaterialTheme.typography.bodySmall, color = Color.White)
+private fun TopBar(device: DeviceInfo, stats: SessionStats, showHud: Boolean, onToggleHud: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+        modifier = Modifier.fillMaxWidth().height(38.dp).statusBarsPadding(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+        ) {
+            Icon(
+                Icons.Rounded.Visibility,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.size(6.dp))
+            Text(
+                "正在控制 " + device.name,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                "%.0f".format(stats.fps) + " fps · " + (if (stats.rttMs >= 0) "${stats.rttMs} ms" else "—"),
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            IconButton(onClick = onToggleHud, modifier = Modifier.size(34.dp)) {
+                Icon(
+                    if (showHud) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                    contentDescription = if (showHud) "隐藏浮层" else "显示浮层",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun Hud(stats: SessionStats, modifier: Modifier = Modifier) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.58f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = modifier,
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+        ) {
+            HudLine("帧率", "%.1f fps".format(stats.fps))
+            HudLine("码率", "%.2f Mbps".format(stats.kbps / 1000))
+            HudLine("网络", if (stats.rttMs >= 0) "${stats.rttMs} ms" else "—")
+            HudLine("质量", qualityLabel(stats.rttMs))
+            if (stats.idleSeconds >= 5) {
+                HudLine("画面", "${stats.idleSeconds}s 未更新")
+            }
+        }
+    }
+}
+
+@Composable
+private fun HudLine(label: String, value: String) {
+    Row {
+        Text(label, fontSize = 10.sp, color = Color.White.copy(alpha = 0.55f))
+        Spacer(Modifier.size(6.dp))
+        Text(value, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = Color.White)
+    }
+}
+
+@Composable
+private fun BottomBar(
+    locked: Boolean,
+    onBack: () -> Unit,
+    onHome: () -> Unit,
+    onRecents: () -> Unit,
+    onVolumeUp: () -> Unit,
+    onVolumeDown: () -> Unit,
+    onToggleLock: () -> Unit,
+    onDisconnect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f),
+        shape = RoundedCornerShape(26.dp),
+        shadowElevation = 10.dp,
+        modifier = modifier
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .fillMaxWidth()
+            .height(58.dp),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+        ) {
+            BarButton(Icons.Rounded.ArrowBack, "返回", onBack)
+            BarButton(Icons.Rounded.Home, "主页", onHome)
+            BarButton(Icons.Rounded.Apps, "最近任务", onRecents)
+            BarButton(Icons.Rounded.VolumeDown, "音量减", onVolumeDown)
+            BarButton(Icons.Rounded.VolumeUp, "音量加", onVolumeUp)
+            BarButton(
+                if (locked) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
+                if (locked) "解除锁定" else "锁定画面",
+                onToggleLock,
+            )
+            BarButton(Icons.Rounded.LinkOff, "断开", onDisconnect, danger = true)
+        }
+    }
 }
 
 @Composable
 private fun BarButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    modifier: Modifier = Modifier,
-    danger: Boolean = false,
     onClick: () -> Unit,
+    danger: Boolean = false,
 ) {
-    TextButton(onClick = onClick, modifier = modifier.height(56.dp)) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+    IconButton(onClick = onClick, modifier = Modifier.size(44.dp)) {
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
         )
     }
 }
 
-private fun fpsLabel(fps: Double): String = String.format("%.1f fps", fps)
-
-private fun mbpsLabel(kbps: Double): String = String.format("%.2f Mbps", kbps / 1000.0)
-
-private fun rttShort(rtt: Long): String = if (rtt >= 0) "$rtt ms" else "测量中"
+@Composable
+private fun Scrim(content: @Composable () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
 
 /** 质量分级用"文字 + 数值"双重编码，不单靠颜色。 */
 private fun qualityLabel(rtt: Long): String = when {
-    rtt < 0 -> "质量 测量中"
-    rtt <= 120 -> "质量 优秀"
-    rtt <= 250 -> "质量 良好"
-    rtt <= 400 -> "质量 一般"
-    else -> "质量 较差"
+    rtt < 0 -> "测量中"
+    rtt <= 120 -> "优秀"
+    rtt <= 250 -> "良好"
+    rtt <= 400 -> "一般"
+    else -> "较差"
 }

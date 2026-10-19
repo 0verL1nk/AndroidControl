@@ -56,7 +56,9 @@ class DeviceStore(context: Context) {
     }
 
     /** 中继节点地址（"host:port"）。填了就跨网络直连，不用再输地址。 */
-    fun relayAddress(): String? = prefs.getString(KEY_RELAY, null)?.takeIf { it.isNotBlank() }
+    fun relayAddress(): String? =
+        prefs.getString(KEY_RELAY, null)?.takeIf { it.isNotBlank() }
+            ?: dev.ling.controller.BuildConfig.DEFAULT_RELAY_ADDRESS.takeIf { it.isNotBlank() }
 
     fun setRelayAddress(value: String?) {
         prefs.edit().apply {

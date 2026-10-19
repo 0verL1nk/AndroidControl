@@ -1,6 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
+}
+
+// 默认中继地址从本地 local.properties 读取（该文件不入库），
+// 这样"自己的构建默认连自己的节点"，而仓库里不出现任何个人基础设施。
+val defaultRelayAddress: String = run {
+    val props = Properties()
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { props.load(it) }
+    props.getProperty("relay.defaultAddress", "")
 }
 
 android {
@@ -24,6 +35,10 @@ android {
         buildConfig = true
     }
 
+    defaultConfig {
+        buildConfigField("String", "DEFAULT_RELAY_ADDRESS", "\"$defaultRelayAddress\"")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -36,6 +51,7 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons)
     implementation(libs.compose.activity)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.service)

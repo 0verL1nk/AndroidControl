@@ -5,6 +5,8 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="远程协助"
         android:supportsRtl="true"
         android:theme="@style/Theme.Controller">
