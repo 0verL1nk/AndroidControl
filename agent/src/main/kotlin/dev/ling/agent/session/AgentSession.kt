@@ -8,6 +8,7 @@ import dev.ling.agent.engine.IEngineService
 import dev.ling.agent.launcher.ServerLauncher
 import dev.ling.agent.net.AgentProxy
 import dev.ling.agent.net.EngineStreams
+import dev.ling.agent.net.RelayClient
 import dev.ling.agent.trust.PairingStore
 import java.io.Closeable
 import java.io.InputStream
@@ -32,6 +33,7 @@ class AgentSession(
 ) {
 
     private var proxy: AgentProxy? = null
+    private var relay: RelayClient? = null
     private var streams: Closeable? = null
     private var engine: IEngineService? = null
     private val started = AtomicBoolean(false)
@@ -107,6 +109,29 @@ class AgentSession(
         state("已就绪")
         onPhase(AssistPhase.Ready, "已准备好，等待家人连接")
         onReady(SessionInfo(controlPort, videoPort, token, scidHex))
+
+        // 配了中继就主动连出去：这样两台手机都不需要任何入站可达性，
+        // 长辈手机上也不用再装 VPN
+        val store = PairingStore(context)
+        val relayHost = store.relayHost()
+        if (!relayHost.isNullOrBlank()) {
+            state("连接中继节点 $relayHost…")
+            relay = RelayClient(
+                nodeHost = relayHost,
+                nodePort = store.relayPort(),
+                token = token,
+                localControlPort = controlPort,
+                localVideoPort = videoPort,
+                onState = { message ->
+                    state(message)
+                    val connected = message.contains("家人已连接")
+                    onPhase(
+                        if (connected) AssistPhase.Active else AssistPhase.Ready,
+                        if (connected) "正在被协助" else "已准备好，等待家人连接",
+                    )
+                },
+            ).also { it.start() }
+        }
     }
 
     /**
@@ -132,6 +157,8 @@ class AgentSession(
 
     fun stop() {
         started.set(false)
+        relay?.stop()
+        relay = null
         proxy?.stop()
         proxy = null
         runCatching { streams?.close() }

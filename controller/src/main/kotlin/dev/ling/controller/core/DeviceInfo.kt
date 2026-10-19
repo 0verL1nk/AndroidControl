@@ -15,6 +15,9 @@ data class DeviceInfo(
     val androidVersion: String = "",
     /** 首次配对时输入的口令，保存后即可一键连接。 */
     val token: String = "",
+    /** 中继节点；为空表示局域网直连。 */
+    val relayHost: String? = null,
+    val relayPort: Int = 27180,
     val lastUsedAt: Long = 0L,
 ) {
     val address: String get() = "$host:$controlPort"

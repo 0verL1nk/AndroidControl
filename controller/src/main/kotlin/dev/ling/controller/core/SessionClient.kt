@@ -30,6 +30,51 @@ class SessionClient(
 
     /** 连接并完成握手。失败抛异常，调用方负责把原因翻译成人话。 */
     fun connect() {
+        val relay = device.relayHost
+        if (!relay.isNullOrBlank()) {
+            connectViaRelay(relay, device.relayPort)
+            return
+        }
+        connectDirect()
+    }
+
+    /**
+     * 经中继连接：两台手机都在 NAT 后面时用这条。
+     *
+     * 控制端只发 `FIND <口令哈希> <角色>`，中继按哈希把它和长辈端登记好的连接对接起来；
+     * 之后的握手由长辈端在本地完成，控制端拿到的就是一条已经通了的数据流。
+     * 好处是**不需要地址、不需要 VPN**，只需要那 6 位数字。
+     */
+    private fun connectViaRelay(relayHost: String, relayPort: Int) {
+        val hash = sha256Hex(device.token)
+
+        control = Socket().apply {
+            connect(InetSocketAddress(relayHost, relayPort), connectTimeoutMs)
+            soTimeout = 0
+            tcpNoDelay = true
+        }
+        val controlReply = handshake(control, "FIND $hash control")
+        if (controlReply != "OK") {
+            close()
+            throw SessionException(relayReason(controlReply))
+        }
+        controlOut = control.getOutputStream()
+        controlIn = control.getInputStream()
+
+        video = Socket().apply {
+            connect(InetSocketAddress(relayHost, relayPort), connectTimeoutMs)
+            soTimeout = 0
+            tcpNoDelay = true
+        }
+        val videoReply = handshake(video, "FIND $hash video")
+        if (videoReply != "OK") {
+            close()
+            throw SessionException(relayReason(videoReply))
+        }
+        videoIn = video.getInputStream()
+    }
+
+    private fun connectDirect() {
         control = open(device.controlPort)
         controlOut = control.getOutputStream()
         val controlLine = handshake(control, "HELLO ${device.token}")
@@ -75,6 +120,12 @@ class SessionClient(
         return sb.toString().trim()
     }
 
+    private fun relayReason(reply: String): String = when (reply) {
+        "ERR" -> "这台手机还没连上中继（可能刚重启，稍后再试）"
+        "" -> "中继没有响应"
+        else -> "中继拒绝了连接（$reply）"
+    }
+
     private fun handshakeReason(reply: String): String = when {
         reply == "BUSY" -> "已有其他人在看这台手机"
         reply == "ERR" -> "口令不正确"
@@ -86,6 +137,11 @@ class SessionClient(
         runCatching { control.close() }
         runCatching { video.close() }
     }
+
+    private fun sha256Hex(value: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray())
+            .joinToString("") { "%02x".format(it) }
 
     class SessionException(message: String) : Exception(message)
 }

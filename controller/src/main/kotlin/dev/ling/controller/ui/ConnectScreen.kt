@@ -52,6 +52,8 @@ fun ConnectScreen(
     onConnectDevice: (DeviceInfo) -> Unit,
     onForget: (DeviceInfo) -> Unit,
     onConnectManual: (host: String, port: Int, token: String) -> Unit = { _, _, _ -> },
+    relayAddress: String? = null,
+    onRelayAddressChange: (String) -> Unit = {},
 ) {
     var token by remember { mutableStateOf("") }
     var manualOpen by remember { mutableStateOf(false) }
@@ -130,6 +132,17 @@ fun ConnectScreen(
                 modifier = Modifier.fillMaxWidth().height(56.dp),
             ) { Text("连接这台设备") }
         }
+
+        // 中继节点：填一次，之后两台手机在任何网络下都能连（不需要 VPN，也不需要地址）
+        OutlinedTextField(
+            value = relayAddress.orEmpty(),
+            onValueChange = onRelayAddressChange,
+            label = { Text("中继节点（可选）") },
+            placeholder = { Text("如 203.0.113.10:27180") },
+            supportingText = { Text("填了就能跨网络连接：长辈端在家、你在外面也能连") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
 
         // 状态与失败原因：给人话，不给错误码
         status?.let {

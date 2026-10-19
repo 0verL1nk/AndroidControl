@@ -32,6 +32,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // 部署用：am start ... --es relay_host <节点> [--ei relay_port 27180]
+        intent?.getStringExtra("relay_host")?.takeIf { it.isNotBlank() }?.let { host ->
+            val port = intent.getIntExtra("relay_port", 27180)
+            dev.ling.agent.trust.PairingStore(this).setRelay(host, port)
+            android.util.Log.i("AgentMain", "中继已配置：$host:$port")
+        }
+
         Shizuku.addRequestPermissionResultListener(permissionListener)
         requestNotificationPermission()
 

@@ -31,6 +31,8 @@ class DeviceStore(context: Context) {
                     androidVersion = o.optString("android"),
                     token = o.optString("token"),
                     lastUsedAt = o.optLong("lastUsedAt"),
+                    relayHost = o.optString("relayHost").takeIf { it.isNotBlank() },
+                    relayPort = o.optInt("relayPort", 27180),
                 )
             }
         }.getOrDefault(emptyList())
@@ -53,6 +55,15 @@ class DeviceStore(context: Context) {
         save(list)
     }
 
+    /** 中继节点地址（"host:port"）。填了就跨网络直连，不用再输地址。 */
+    fun relayAddress(): String? = prefs.getString(KEY_RELAY, null)?.takeIf { it.isNotBlank() }
+
+    fun setRelayAddress(value: String?) {
+        prefs.edit().apply {
+            if (value.isNullOrBlank()) remove(KEY_RELAY) else putString(KEY_RELAY, value.trim())
+        }.apply()
+    }
+
     private fun save(list: List<DeviceInfo>) {
         val arr = JSONArray()
         list.forEach { d ->
@@ -66,6 +77,8 @@ class DeviceStore(context: Context) {
                     put("brand", d.brand)
                     put("android", d.androidVersion)
                     put("token", d.token)
+                    put("relayHost", d.relayHost ?: "")
+                    put("relayPort", d.relayPort)
                     put("lastUsedAt", d.lastUsedAt)
                 }
             )
@@ -75,5 +88,6 @@ class DeviceStore(context: Context) {
 
     private companion object {
         const val KEY = "list"
+        const val KEY_RELAY = "relay_address"
     }
 }

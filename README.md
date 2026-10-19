@@ -40,14 +40,17 @@
 
 完整步骤见 `docs/ops/`。三步：
 
-**1. 搭节点**（任意有公网 IP 的 Debian/Ubuntu VPS）
+**1. 搭节点**（任意有公网 IP 的机器）—— 两种方式，任选其一：
 
 ```bash
+# 方式 A（推荐）：配对中继。长辈手机除了本 App 什么都不用装
+python3 tools/relay-server.py --listen 0.0.0.0:27180
+
+# 方式 B：WireGuard。要链路加密时用
 sudo bash tools/setup-node.sh
 ```
 
-会装好 WireGuard、生成密钥、启动隧道，并在 `/root/wg-clients/` 下输出两个对端配置及
-二维码。
+中继方式下，控制端只需要输入长辈手机上的 6 位数字即可连接，不需要地址、不需要 VPN。
 
 **2. 配置两台手机**
 

@@ -31,6 +31,18 @@ class PairingStore(context: Context) {
         return generated
     }
 
+    /**
+     * 中继节点地址。为空表示只用局域网直连（开发/同网场景）。
+     * 部署时由子女设置一次（可经 intent 传入），之后长辈端每次启动自动连上去。
+     */
+    fun relayHost(): String? = prefs.getString(KEY_RELAY_HOST, null)?.takeIf { it.isNotBlank() }
+
+    fun relayPort(): Int = prefs.getInt(KEY_RELAY_PORT, DEFAULT_RELAY_PORT)
+
+    fun setRelay(host: String, port: Int = DEFAULT_RELAY_PORT) {
+        prefs.edit().putString(KEY_RELAY_HOST, host.trim()).putInt(KEY_RELAY_PORT, port).apply()
+    }
+
     /** 已绑定的控制端（M1 仅记录，白名单鉴权在后续实现）。 */
     fun addBinding(deviceId: String, displayName: String) {
         prefs.edit().putString("binding.$deviceId", displayName).apply()
@@ -46,5 +58,8 @@ class PairingStore(context: Context) {
 
     private companion object {
         const val KEY_TOKEN = "token"
+        const val KEY_RELAY_HOST = "relay_host"
+        const val KEY_RELAY_PORT = "relay_port"
+        const val DEFAULT_RELAY_PORT = 27180
     }
 }
