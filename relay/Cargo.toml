@@ -19,6 +19,9 @@ path = "src/main.rs"
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
 socket2 = { version = "0.5", features = ["all"] }
+# 浏览器控制端：自己做 WebSocket 握手需要 SHA-1 + Base64（只用于 Sec-WebSocket-Accept）
+sha1 = "0.10"
+base64 = "0.22"
 
 [profile.release]
 # 节点上只跑一个二进制：体积换启动速度没有意义，压小一点省磁盘

@@ -1,7 +1,7 @@
 import java.util.Properties
 
 plugins {
-    alias(libs.plugins.android.application)
+    alias(libs.plugins.android.library)
     alias(libs.plugins.compose.compiler)
 }
 
@@ -19,15 +19,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "dev.ling.controller"
         minSdk = 26
-        targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
-    }
-
-    buildTypes {
-        release { isMinifyEnabled = false }
     }
 
     buildFeatures {

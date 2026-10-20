@@ -33,6 +33,31 @@
 
 ---
 
+## 网页控制端（可选）
+
+`web/` 是 Next.js 的浏览器控制端，复用同一个中继与同一套协议：
+
+- 浏览器打开两条 WebSocket：`video <哈希>` 与 `control <哈希>`，
+  中继按角色把它们和长辈端的数据流对接（和 App 的控制端完全一样）；
+- 页面用 WebCodecs 解码 H.264，触摸与按键通过控制流注入。
+
+部署步骤：
+
+1. **部署前端**：在 Vercel 导入本仓库，Root Directory 选 `web/`，
+   环境变量设置 `NEXT_PUBLIC_RELAY_URL=wss://<你的中继域名>`。
+   HTTPS 页面不能连 `ws://`，所以必须是 `wss://`。
+2. **给中继一个 TLS 入口**（中继本身只监听明文）：
+   - 最简单：Cloudflare Tunnel。
+     临时试用：`cloudflared tunnel --url http://127.0.0.1:27180`（地址每次重启都变）；
+     长期使用：在 Cloudflare 建一条命名隧道，把 `relay.<你的域名>` 指到
+     `http://127.0.0.1:27180`（WebSocket 直通，证书由 Cloudflare 负责）。
+   - 或者在节点上放 Caddy / Nginx 做 TLS 终止，反代 `/ws` 到 `127.0.0.1:27180`。
+3. 浏览器要求**安全上下文**（HTTPS 或 localhost）才能使用 WebCodecs 与加密接口。
+
+> 中继的 `GET /` 只返回一行说明文本，不再内嵌网页；前端与中继可以分开部署。
+
+---
+
 ## 部署
 
 ```bash

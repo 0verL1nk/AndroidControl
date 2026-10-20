@@ -118,7 +118,7 @@ class AgentService : Service() {
             onReady = { info ->
                 INFO = info
                 _state.value = _state.value.copy(info = info)
-                notify(buildNotification("已准备好，等待家人连接"))
+                notify(buildNotification("已准备好，等待对方连接"))
             },
             onPhase = { phase, message ->
                 Log.i(TAG, "阶段：$phase - $message")
@@ -139,9 +139,9 @@ class AgentService : Service() {
                 // 状态变化时播报一句：长辈不一定看着屏幕，但听得到
                 when {
                     phase == AssistPhase.Active && lastPhase != AssistPhase.Active ->
-                        announcer?.announce("家人已连接，正在看你的手机")
+                        announcer?.announce("对方已连接，正在看你的手机")
                     phase == AssistPhase.Ready && lastPhase == AssistPhase.Active ->
-                        announcer?.announce("家人已断开")
+                        announcer?.announce("对方已断开")
                 }
                 lastPhase = phase
             },
@@ -199,7 +199,7 @@ class AgentService : Service() {
             "协助状态",
             NotificationManager.IMPORTANCE_LOW, // 不发声，但常驻可见
         ).apply {
-            description = "显示当前是否正在被家人协助"
+            description = "显示当前是否正在被协助"
             setShowBadge(false)
         }
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)

@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Agent" parent="android:Theme.Material.Light.NoActionBar">
+    <!-- 深色模式：不要让启动瞬间闪一下白屏，状态栏图标也要跟着变白 -->
+    <style name="Theme.Controller" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/splash_background</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

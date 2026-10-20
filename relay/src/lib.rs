@@ -37,6 +37,17 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+use sha1::{Digest, Sha1};
+
+/// 中继自己不再内嵌前端：网页控制端在 `web/`（Next.js），单独部署到 Vercel 或任意静态托管。
+const WEB_HINT: &str =
+    "AndroidControl relay is running.
+
+Web client: deploy web/ (Next.js). WebSocket endpoint: /ws
+";
+
 pub const AGENT_VERB: &str = "AGENT";
 pub const DATA_VERB: &str = "DATA";
 pub const FIND_VERB: &str = "FIND";
@@ -162,6 +173,13 @@ pub async fn handle_connection(
     let Some(line) = read_line_raw(&mut rd, LINE_LIMIT).await else {
         return;
     };
+
+    // 浏览器控制端：同一个端口既发页面（GET /）也升级成 WebSocket（GET /ws）
+    if line.starts_with("GET ") {
+        handle_http(rd, wr, line, registry).await;
+        return;
+    }
+
     let parts: Vec<&str> = line.split(' ').collect();
     let verb = parts.first().copied().unwrap_or("").to_uppercase();
 
@@ -310,29 +328,30 @@ async fn handle_data(
     }
 }
 
-/// 控制端找设备：通过信令让长辈端开流，等它连上来后把两条连接对接。
-async fn handle_controller(
-    rd: OwnedReadHalf,
-    mut wr: OwnedWriteHalf,
-    hash: String,
-    role: String,
-    peer: SocketAddr,
-    registry: Arc<Mutex<Registry>>,
-) {
-    let signaling = lock(&registry).signaling.get(&hash).cloned();
-    let Some(signaling) = signaling else {
-        log(format!(
-            "控制端找 {role}（{}…）—— 长辈端不在线",
-            short(&hash)
-        ));
-        let _ = wr.write_all(b"ERR\n").await;
-        return;
-    };
+/// 配对结果：长辈端不在线，或开了流但没在时限内连上来。
+enum PairError {
+    Offline,
+    Timeout,
+}
 
-    let key = (hash.clone(), role.clone());
+/// 通过信令让长辈端开一条数据连接，并等它接入。
+///
+/// TCP 控制端与浏览器控制端共用这一段——两边只是"把字节交给谁"不同。
+async fn pair_agent(
+    hash: &str,
+    role: &str,
+    registry: &Arc<Mutex<Registry>>,
+) -> Result<(OwnedReadHalf, OwnedWriteHalf), PairError> {
+    let signaling = lock(registry)
+        .signaling
+        .get(hash)
+        .cloned()
+        .ok_or(PairError::Offline)?;
+
+    let key = (hash.to_string(), role.to_string());
     let (tx, rx) = oneshot::channel();
     let id = {
-        let mut reg = lock(&registry);
+        let mut reg = lock(registry);
         reg.next_id += 1;
         let id = reg.next_id;
         if reg.waiting.insert(key.clone(), Waiting { id, tx }).is_some() {
@@ -342,16 +361,33 @@ async fn handle_controller(
         id
     };
 
-    if signaling.send(Signal::Open(role.clone())).await.is_err() {
+    if signaling.send(Signal::Open(role.to_string())).await.is_err() {
         log("通知长辈端失败，连接可能已失效");
-        remove_waiting(&registry, &key, id);
-        let _ = wr.write_all(b"ERR\n").await;
-        return;
+        remove_waiting(registry, &key, id);
+        return Err(PairError::Offline);
     }
 
     // 长辈端一般几十毫秒就开好流；等不到就明确失败，不让控制端干等
     match tokio::time::timeout(DATA_TIMEOUT, rx).await {
-        Ok(Ok((agent_rd, agent_wr))) => {
+        Ok(Ok(pair)) => Ok(pair),
+        _ => {
+            remove_waiting(registry, &key, id);
+            Err(PairError::Timeout)
+        }
+    }
+}
+
+/// 控制端找设备：通过信令让长辈端开流，等它连上来后把两条连接对接。
+async fn handle_controller(
+    rd: OwnedReadHalf,
+    mut wr: OwnedWriteHalf,
+    hash: String,
+    role: String,
+    peer: SocketAddr,
+    registry: Arc<Mutex<Registry>>,
+) {
+    match pair_agent(&hash, &role, &registry).await {
+        Ok((agent_rd, agent_wr)) => {
             if wr.write_all(b"OK\n").await.is_err() {
                 return;
             }
@@ -362,8 +398,14 @@ async fn handle_controller(
             ));
             splice((rd, wr), (agent_rd, agent_wr)).await;
         }
-        _ => {
-            remove_waiting(&registry, &key, id);
+        Err(PairError::Offline) => {
+            log(format!(
+                "控制端找 {role}（{}…）—— 长辈端不在线",
+                short(&hash)
+            ));
+            let _ = wr.write_all(b"ERR\n").await;
+        }
+        Err(PairError::Timeout) => {
             log(format!("等长辈端开 {role} 流超时"));
         }
     }
@@ -375,6 +417,242 @@ fn remove_waiting(registry: &Arc<Mutex<Registry>>, key: &(String, String), id: u
     if reg.waiting.get(key).is_some_and(|waiting| waiting.id == id) {
         reg.waiting.remove(key);
     }
+}
+
+// ── 浏览器控制端：内嵌页面 + 极简 WebSocket ──────────────────────
+
+/// 单帧上限：视频分片远小于它，超过只可能是坏数据。
+const MAX_WS_FRAME: usize = 4 * 1024 * 1024;
+
+const WS_TEXT: u8 = 0x1;
+const WS_BINARY: u8 = 0x2;
+const WS_CLOSE: u8 = 0x8;
+const WS_PING: u8 = 0x9;
+const WS_PONG: u8 = 0xA;
+
+/// 处理 HTTP 请求：`GET /` 给页面，带 `Upgrade: websocket` 的升级成 WebSocket。
+async fn handle_http(
+    mut rd: OwnedReadHalf,
+    mut wr: OwnedWriteHalf,
+    request_line: String,
+    registry: Arc<Mutex<Registry>>,
+) {
+    let mut headers = Vec::new();
+    while let Some(line) = read_line_raw(&mut rd, 4096).await {
+        if line.is_empty() {
+            break;
+        }
+        headers.push(line);
+    }
+
+    let is_websocket = headers.iter().any(|header| {
+        let lower = header.to_ascii_lowercase();
+        lower.starts_with("upgrade:") && lower.contains("websocket")
+    });
+
+    if is_websocket {
+        // 值区分大小写，只能按"原行里冒号之后"取，不能先把整行转小写
+        let key = headers
+            .iter()
+            .find_map(|header| {
+                let lower = header.to_ascii_lowercase();
+                if lower.starts_with("sec-websocket-key:") {
+                    header
+                        .find(':')
+                        .map(|colon| header[colon + 1..].trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        if key.is_empty() {
+            let _ = wr
+                .write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+                .await;
+            return;
+        }
+        let accept = websocket_accept(&key);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+        );
+        if wr.write_all(response.as_bytes()).await.is_err() {
+            return;
+        }
+        handle_websocket(rd, wr, registry).await;
+        return;
+    }
+
+    let path = request_line.split(' ').nth(1).unwrap_or("/");
+    if path == "/" || path == "/index.html" {
+        let body = WEB_HINT.as_bytes();
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\r\n",
+            body.len()
+        );
+        let _ = wr.write_all(head.as_bytes()).await;
+        let _ = wr.write_all(body).await;
+    } else {
+        let _ = wr
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await;
+    }
+}
+
+fn websocket_accept(key: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(key.as_bytes());
+    hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    BASE64.encode(hasher.finalize())
+}
+
+async fn read_ws_frame(rd: &mut OwnedReadHalf) -> Option<(u8, Vec<u8>)> {
+    let first = rd.read_u8().await.ok()?;
+    let second = rd.read_u8().await.ok()?;
+    let opcode = first & 0x0F;
+    let masked = second & 0x80 != 0;
+    let len = match second & 0x7F {
+        126 => {
+            let mut bytes = [0u8; 2];
+            rd.read_exact(&mut bytes).await.ok()?;
+            u16::from_be_bytes(bytes) as usize
+        }
+        127 => {
+            let mut bytes = [0u8; 8];
+            rd.read_exact(&mut bytes).await.ok()?;
+            u64::from_be_bytes(bytes) as usize
+        }
+        small => small as usize,
+    };
+    if len > MAX_WS_FRAME {
+        return None;
+    }
+    let mask = if masked {
+        let mut bytes = [0u8; 4];
+        rd.read_exact(&mut bytes).await.ok()?;
+        Some(bytes)
+    } else {
+        None
+    };
+    let mut payload = vec![0u8; len];
+    if len > 0 {
+        rd.read_exact(&mut payload).await.ok()?;
+        if let Some(mask) = mask {
+            for (index, byte) in payload.iter_mut().enumerate() {
+                *byte ^= mask[index % 4];
+            }
+        }
+    }
+    Some((opcode, payload))
+}
+
+async fn write_ws_frame(
+    wr: &mut OwnedWriteHalf,
+    opcode: u8,
+    payload: &[u8],
+) -> std::io::Result<()> {
+    let mut header = [0u8; 10];
+    header[0] = 0x80 | opcode;
+    let header_len = if payload.len() < 126 {
+        header[1] = payload.len() as u8;
+        2
+    } else if payload.len() <= u16::MAX as usize {
+        header[1] = 126;
+        header[2..4].copy_from_slice(&(payload.len() as u16).to_be_bytes());
+        4
+    } else {
+        header[1] = 127;
+        header[2..10].copy_from_slice(&(payload.len() as u64).to_be_bytes());
+        10
+    };
+    wr.write_all(&header[..header_len]).await?;
+    wr.write_all(payload).await?;
+    wr.flush().await
+}
+
+/// 浏览器控制端：第一条消息是 `video <哈希>` / `control <哈希>`，之后就是同一条数据流。
+///
+/// 视频方向：长辈端 → WebSocket 二进制帧；控制方向：WebSocket 二进制帧 → 长辈端。
+async fn handle_websocket(
+    mut rd: OwnedReadHalf,
+    mut wr: OwnedWriteHalf,
+    registry: Arc<Mutex<Registry>>,
+) {
+    let Some((opcode, payload)) = read_ws_frame(&mut rd).await else {
+        return;
+    };
+    if opcode != WS_TEXT {
+        let _ = write_ws_frame(&mut wr, WS_CLOSE, &[]).await;
+        return;
+    }
+    let text = String::from_utf8_lossy(&payload).trim().to_string();
+    let parts: Vec<&str> = text.split(' ').collect();
+    if parts.len() != 2 || !is_role(parts[0]) {
+        let _ = write_ws_frame(&mut wr, WS_TEXT, b"ERR").await;
+        return;
+    }
+    let role = parts[0].to_string();
+    let hash = parts[1].to_string();
+
+    let (mut agent_rd, mut agent_wr) = match pair_agent(&hash, &role, &registry).await {
+        Ok(pair) => pair,
+        Err(PairError::Offline) => {
+            let _ = write_ws_frame(&mut wr, WS_TEXT, b"ERR").await;
+            return;
+        }
+        Err(PairError::Timeout) => {
+            let _ = write_ws_frame(&mut wr, WS_TEXT, b"TIMEOUT").await;
+            return;
+        }
+    };
+
+    // 写端由两个方向共享：上行数据与 pong 都要发，必须串行
+    let writer = std::sync::Arc::new(tokio::sync::Mutex::new(wr));
+    {
+        let mut guard = writer.lock().await;
+        if write_ws_frame(&mut guard, WS_TEXT, b"OK").await.is_err() {
+            return;
+        }
+    }
+    log(format!("浏览器已接入 {role}（{}…）", short(&hash)));
+
+    let uplink_writer = std::sync::Arc::clone(&writer);
+    let uplink = tokio::spawn(async move {
+        let mut buffer = vec![0u8; 64 * 1024];
+        loop {
+            match agent_rd.read(&mut buffer).await {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    let mut guard = uplink_writer.lock().await;
+                    if write_ws_frame(&mut guard, WS_BINARY, &buffer[..read])
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    loop {
+        match read_ws_frame(&mut rd).await {
+            Some((WS_BINARY, data)) => {
+                if agent_wr.write_all(&data).await.is_err() {
+                    break;
+                }
+            }
+            Some((WS_PING, data)) => {
+                let mut guard = writer.lock().await;
+                let _ = write_ws_frame(&mut guard, WS_PONG, &data).await;
+            }
+            Some((WS_CLOSE, _)) | None => break,
+            Some(_) => {}
+        }
+    }
+
+    uplink.abort();
+    let _ = agent_wr.shutdown().await;
+    log(format!("浏览器断开 {role}（{}…）", short(&hash)));
 }
 
 /// 两条连接字节级对接，任一方向断开就一起收摊。
@@ -459,5 +737,14 @@ mod tests {
     fn short_hash_never_panics() {
         assert_eq!(short("0123456789abcdef"), "01234567");
         assert_eq!(short("abc"), "abc");
+    }
+
+    #[test]
+    fn websocket_accept_matches_rfc_example() {
+        // RFC 6455 §1.3 的标准示例
+        assert_eq!(
+            websocket_accept("dGhlIHNhbXBsZSBub25jZQ=="),
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        );
     }
 }

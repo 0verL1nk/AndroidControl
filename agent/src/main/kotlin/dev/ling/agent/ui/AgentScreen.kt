@@ -138,7 +138,7 @@ fun AgentScreen(
             modifier = Modifier.widthIn(max = 300.dp),
         )
 
-        // 配对码：只在"已准备好"时出现，长辈照着念给家人即可
+        // 配对码：只在"已准备好"时出现，照着念给协助者即可
         state.info?.token?.takeIf { state.phase == AssistPhase.Ready && it.isNotBlank() }?.let { token ->
             Spacer(Modifier.height(32.dp))
             PairingCodeCard(token, palette)
@@ -162,7 +162,7 @@ fun AgentScreen(
         AlertDialog(
             onDismissRequest = { confirmStop = false },
             title = { Text("要结束这次协助吗？", fontSize = 28.sp, fontWeight = FontWeight.Bold) },
-            text = { Text("结束后家人将看不到你的手机", fontSize = 19.sp, lineHeight = 26.sp) },
+            text = { Text("结束后对方将看不到你的手机", fontSize = 19.sp, lineHeight = 26.sp) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmStop = false
@@ -249,7 +249,7 @@ private fun PairingCodeCard(token: String, palette: Palette) {
                 color = palette.title,
             )
             Spacer(Modifier.height(6.dp))
-            Text("让家人输入这 6 位数字", fontSize = 15.sp, color = palette.body)
+            Text("让对方输入这 6 位数字", fontSize = 15.sp, color = palette.body)
         }
     }
 }
@@ -411,17 +411,17 @@ private fun titleFor(state: AgentUiState): String = when (state.phase) {
 }
 
 private fun subtitleFor(state: AgentUiState): String = when (state.phase) {
-    AssistPhase.Idle -> "点下面的按钮，家人就可以帮你"
+    AssistPhase.Idle -> "点下面的按钮，对方就可以帮你"
     AssistPhase.Preparing -> "请稍候，不要关机"
-    AssistPhase.Ready -> "家人现在可以连接这台手机"
-    AssistPhase.Active -> "家人正在看你的手机，有任何不舒服可以随时结束"
-    AssistPhase.Error -> "请让家人看看，或者点下面的按钮重试"
+    AssistPhase.Ready -> "对方现在可以连接这台手机"
+    AssistPhase.Active -> "对方正在看你的手机，有任何不舒服可以随时结束"
+    AssistPhase.Error -> "请让协助你的人看看，或者点下面的按钮重试"
 }
 
 private fun accessibilityText(state: AgentUiState): String = when (state.phase) {
-    AssistPhase.Idle -> "状态：未开启协助。点开启协助按钮，家人就可以帮你"
+    AssistPhase.Idle -> "状态：未开启协助。点开启协助按钮，对方就可以帮你"
     AssistPhase.Preparing -> "状态：正在准备，请稍候"
-    AssistPhase.Ready -> "状态：已准备好协助。家人现在可以连接这台手机"
-    AssistPhase.Active -> "正在被协助。家人正在看你的手机。双击可结束"
+    AssistPhase.Ready -> "状态：已准备好协助。对方现在可以连接这台手机"
+    AssistPhase.Active -> "正在被协助。对方正在看你的手机。双击可结束"
     AssistPhase.Error -> "出错了：${state.error ?: "未知原因"}。双击可重试"
 }
