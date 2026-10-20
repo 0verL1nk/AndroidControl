@@ -1,11 +1,10 @@
 plugins {
-    alias(libs.plugins.android.application)
+    alias(libs.plugins.android.library)
     alias(libs.plugins.compose.compiler)
 }
 
-// AGP 9 起 Kotlin 支持内置（android.builtInKotlin 默认 true），
-// 不再需要也不兼容 org.jetbrains.kotlin.android 插件。
-// jvmTarget 由 compileOptions 推导，KGP 版本由 AGP 固定（当前 2.2.10）。
+// 被协助端逻辑（以库的形式并入 :app）。
+// AGP 9 起 Kotlin 支持内置，不再需要 kotlin-android 插件。
 
 android {
     namespace = "dev.ling.agent"
@@ -13,29 +12,14 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "dev.ling.agent"
         minSdk = 26
-        targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-        }
-    }
-
-    // 引擎 jar 不做压缩：assets.openFd 要求未压缩，且避免每次释放时解压
-    androidResources {
-        noCompress += listOf("jar")
     }
 
     // UserService 需要跨进程接口
     buildFeatures {
         aidl = true
         compose = true
-        // AGP 8 起 BuildConfig 默认不生成，这里显式打开（探针里用 BuildConfig.DEBUG）
+        // AGP 8 起 BuildConfig 默认不生成，探针里用 BuildConfig.DEBUG
         buildConfig = true
     }
 

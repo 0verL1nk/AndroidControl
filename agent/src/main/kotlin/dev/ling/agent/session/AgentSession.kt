@@ -113,12 +113,12 @@ class AgentSession(
         p.onClientChanged = { connected ->
             onPhase(
                 if (connected) AssistPhase.Active else AssistPhase.Ready,
-                if (connected) "正在被协助" else "已准备好，等待家人连接",
+                if (connected) "正在被协助" else "已准备好，等待对方连接",
             )
         }
         val (controlPort, videoPort) = p.start()
         state("已就绪")
-        onPhase(AssistPhase.Ready, "已准备好，等待家人连接")
+        onPhase(AssistPhase.Ready, "已准备好，等待对方连接")
         onReady(SessionInfo(controlPort, videoPort, token, scidHex))
 
         Thread({ monitorSensitivePages(service, p) }, "sensitive-pages")
@@ -138,10 +138,10 @@ class AgentSession(
                 localVideoPort = videoPort,
                 onState = { message ->
                     state(message)
-                    val connected = message.contains("家人已连接")
+                    val connected = message.contains("对方已连接")
                     onPhase(
                         if (connected) AssistPhase.Active else AssistPhase.Ready,
-                        if (connected) "正在被协助" else "已准备好，等待家人连接",
+                        if (connected) "正在被协助" else "已准备好，等待对方连接",
                     )
                 },
             )
@@ -200,10 +200,10 @@ class AgentSession(
 
     /** 把底层原因翻成长辈能看懂的一句话（不出现错误码）。 */
     private fun humanize(raw: String): String = when {
-        raw.contains("Shizuku", ignoreCase = true) -> "权限丢失了，需要家人重新设置一次"
+        raw.contains("Shizuku", ignoreCase = true) -> "权限丢失了，需要协助你的人重新设置一次"
         raw.contains("引擎", ignoreCase = true) -> "协助暂时用不了，可能是系统更新了"
         raw.contains("网络", ignoreCase = true) -> "网络没连上，请检查家里的 Wi-Fi"
-        else -> "出了点问题，请让家人看看"
+        else -> "出了点问题，请让协助你的人看看"
     }
 
     /**

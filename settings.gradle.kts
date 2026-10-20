@@ -19,5 +19,6 @@ rootProject.name = "AndroidControl"
 include(":protocol")
 include(":design")
 include(":audio")
+include(":app")
 include(":agent")
 include(":controller")

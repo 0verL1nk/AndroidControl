@@ -22,14 +22,12 @@ jobs:
       - name: 构建与单元测试
         run: |
           chmod +x gradlew
-          ./gradlew :protocol:test :agent:assembleDebug :controller:assembleDebug --stacktrace
+          ./gradlew :protocol:test :app:assembleDebug --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
           name: debug-apks
-          path: |
-            agent/build/outputs/apk/debug/*.apk
-            controller/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/debug/*.apk
 
   relay:
     name: 中继（Rust 测试）

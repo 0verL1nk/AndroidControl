@@ -311,7 +311,7 @@ private fun TopBar(
     onToggleVoice: () -> Unit,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
@@ -416,7 +416,7 @@ private fun BottomBar(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
         shape = RoundedCornerShape(26.dp),
         shadowElevation = 10.dp,
         modifier = modifier

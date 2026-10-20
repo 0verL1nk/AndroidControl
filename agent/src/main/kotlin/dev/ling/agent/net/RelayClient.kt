@@ -91,7 +91,7 @@ class RelayClient(
             }
             signalingOut = out
 
-            onState("隧道已建立，等待家人连接")
+            onState("隧道已建立，等待对方连接")
             Log.i(TAG, "信令已连接")
             onSignalingReady?.invoke()
 
@@ -170,12 +170,12 @@ class RelayClient(
                         throw IllegalStateException("本地代理拒绝了握手（可能已有其他人在看）")
                     }
 
-                    onState("家人已连接（$role）")
+                    onState("对方已连接（$role）")
                     Log.i(TAG, "$role 数据流已建立")
                     relay.soTimeout = 0
                     local.soTimeout = 0
                     pumpBothWays(relay, local, role)
-                    onState("家人已断开（$role）")
+                    onState("对方已断开（$role）")
                 }
             }
         } catch (t: Throwable) {
@@ -184,9 +184,9 @@ class RelayClient(
     }
 
     private fun pumpBothWays(a: Socket, b: Socket, role: String) {
-        val up = Thread({ pump("$role 上行", a.getInputStream(), b.getOutputStream()) }, "relay-up")
+        val up = Thread({ pump("$role 上行", a, b) }, "relay-up")
             .apply { isDaemon = true; start() }
-        pump("$role 下行", b.getInputStream(), a.getOutputStream())
+        pump("$role 下行", b, a)
         // 任一方向结束就关掉两端：否则另一个方向会一直阻塞在读上，
         // 会话结束后既不会退出也不会重新登记（实测踩到过）。
         runCatching { a.close() }
@@ -194,17 +194,24 @@ class RelayClient(
         up.interrupt()
     }
 
-    private fun pump(label: String, from: InputStream, to: OutputStream) {
+    /**
+     * 在 try 里获取流：对端可能已经关闭，`getInputStream()` 会抛异常。
+     * 这个线程上的未捕获异常会直接杀掉整个长辈端进程（Android 的默认处理器），
+     * 所以从取流到转发都必须包住。
+     */
+    private fun pump(label: String, from: Socket, to: Socket) {
         val buffer = ByteArray(64 * 1024)
         try {
+            val input = from.getInputStream()
+            val output = to.getOutputStream()
             while (running.get()) {
-                val n = from.read(buffer)
+                val n = input.read(buffer)
                 if (n < 0) {
                     Log.i(TAG, "$label 对端正常关闭")
                     break
                 }
-                to.write(buffer, 0, n)
-                to.flush()
+                output.write(buffer, 0, n)
+                output.flush()
             }
         } catch (t: Throwable) {
             Log.i(TAG, "$label 异常结束：${t.message}")

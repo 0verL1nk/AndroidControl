@@ -133,7 +133,7 @@ fun ConnectScreen(
                     letterSpacing = (-0.3).sp,
                 )
                 Text(
-                    "帮家人操作手机",
+                    "远程操作另一台手机",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -151,7 +151,7 @@ fun ConnectScreen(
 
         Spacer(Modifier.height(36.dp))
 
-        Text("输入长辈手机上的 6 位数字", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("输入被协助手机上的 6 位数字", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(14.dp))
 
         CodeInput(token) { token = it }
@@ -424,13 +424,13 @@ private fun DeviceCard(
     }
 }
 
-/** 求助时间 → 人话（"长辈刚刚按了求助"）。 */
+/** 求助时间 → 人话（"对方刚刚按了求助"）。 */
 private fun helpAgo(at: Long): String {
     val minutes = (System.currentTimeMillis() - at) / 60_000
     return when {
-        minutes < 1 -> "长辈刚刚按了求助"
-        minutes < 60 -> "长辈 $minutes 分钟前按了求助"
-        else -> "长辈 ${minutes / 60} 小时前按了求助"
+        minutes < 1 -> "对方刚刚按了求助"
+        minutes < 60 -> "对方 $minutes 分钟前按了求助"
+        else -> "对方 ${minutes / 60} 小时前按了求助"
     }
 }
 

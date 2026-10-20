@@ -28,22 +28,13 @@
         </intent>
     </queries>
 
-    <application
-        android:allowBackup="false"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:label="长辈端"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.Agent">
+    <application android:allowBackup="false">
 
+        <!-- 入口由 :app 的 HomeActivity 提供 -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
 
         <!-- Shizuku 客户端接入点 -->
         <provider

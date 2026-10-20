@@ -48,47 +48,42 @@
 **1. 搭节点**（任意有公网 IP 的机器）—— 两种方式，任选其一：
 
 ```bash
-# 方式 A（推荐）：配对中继。长辈手机除了本 App 什么都不用装
-# 在任意有公网 IP 的机器上编译并常驻运行（详见 docs/ops/relay-node.md）
+# 方式 A（推荐）：配对中继。两台手机都只需要装本 App
 NODE=root@<节点> bash tools/deploy-relay.sh
 
 # 方式 B：WireGuard。要链路加密时用
 sudo bash tools/setup-node.sh
 ```
 
-中继方式下，控制端只需要输入长辈手机上的 6 位数字即可连接，不需要地址、不需要 VPN。
-
-**2. 配置两台手机**
-
-在两台手机上安装 WireGuard App，扫描对应的二维码导入配置。控制端设置 `10.66.66.2`，
-长辈端 `10.66.66.3`。
-
-配置使用**分流**（`AllowedIPs = 10.66.66.0/24`），不会影响手机正常上网。
-
-**3. 部署长辈端 + 编译控制端**
+**2. 两台手机装同一个 App**
 
 ```bash
-# 长辈端（一次性，需在设备上激活 Shizuku）
-cd agent && ./gradlew assembleDebug && adb install app-debug.apk
-
-# 控制端
-cd controller && ./gradlew assembleDebug && adb install app-debug.apk
+./gradlew :app:assembleDebug
+adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-长辈端按照 `docs/ops/elder-device-setup.md` 完成一次性授权（Shizuku、电池白名单、
-自启动白名单）。
+同一个安装包有两种角色：首页显示**这台手机自己的配对码**，也可以输入对方的配对码去协助别人。
+被协助的那台按 `docs/ops/elder-device-setup.md` 完成一次性授权（Shizuku、麦克风、悬浮窗、电池白名单）。
+打开首页即待命，被协助不需要再按任何按钮。
+
+**3. （可选）网页控制端**
+
+`web/` 是一个 Next.js 应用，部署到 Vercel 后可以用电脑浏览器直接协助——不用在控制端装 App。
+它需要连到中继的 **WSS** 入口（HTTPS 页面不能连 `ws://`），部署与反向代理方式见
+`docs/ops/relay-node.md`。
 
 ## 当前状态
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
-| M0 | 调研与可行性验证 | ✅ 完成 |
-| M1 | 跨公网闭环（看屏 + 操作 + 长辈零操作） | 🔨 开发中 |
-| M2 | 弱网与长期稳定 | 计划 |
-| M3 | 传输优化与安全加固 | 计划 |
-| M4 | 适老体验（一键求助、敏感页提示） | 计划 |
+| M0 | 调研与可行性验证 | ✅ |
+| M1 | 跨公网闭环（看屏 + 操作） | ✅ |
+| M2 | 弱网、长跑与自愈 | ✅ |
+| M3 | 传输优化与安全加固 | ✅ |
+| M4 | 适老体验（求助、敏感页、大字、播报） | ✅ |
+| M5 | 双向语音、多设备、网页控制端 | ✅（iOS 控制端为可选项，未做） |
 
-路线图与决策记录见 `docs/ROADMAP.md`、`docs/DECISIONS.md`。
+细节与实测数据见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## 参与开发
 
