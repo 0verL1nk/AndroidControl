@@ -174,8 +174,9 @@ pub async fn handle_connection(
         return;
     };
 
-    // 浏览器控制端：同一个端口既发页面（GET /）也升级成 WebSocket（GET /ws）
-    if line.starts_with("GET ") {
+    // 浏览器控制端与健康检查：GET/HEAD/OPTIONS 都走 HTTP 分支
+    let method = line.split(' ').next().unwrap_or("");
+    if matches!(method, "GET" | "HEAD" | "OPTIONS") {
         handle_http(rd, wr, line, registry).await;
         return;
     }
