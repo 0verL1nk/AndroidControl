@@ -57,6 +57,7 @@ fun HomeScreen(
     onRetry: () -> Unit,
     onStop: () -> Unit,
     onOpenDetails: () -> Unit,
+    onOpenShizuku: () -> Unit,
     onHelpOther: (String) -> Unit,
 ) {
     var token by remember { mutableStateOf("") }
@@ -148,9 +149,11 @@ fun HomeScreen(
                         phase == AssistPhase.Error -> TextButton(onClick = onRetry) {
                             Text("重试", fontSize = 13.sp)
                         }
-                        !shizukuReady || phase == AssistPhase.Idle -> TextButton(
-                            onClick = onOpenDetails,
-                        ) {
+                        // Shizuku 没运行时，恢复只需要"打开 Shizuku → 启动"，这里直接给入口
+                        !shizukuReady -> TextButton(onClick = onOpenShizuku) {
+                            Text("打开 Shizuku", fontSize = 13.sp)
+                        }
+                        phase == AssistPhase.Idle -> TextButton(onClick = onOpenDetails) {
                             Text("详情", fontSize = 13.sp)
                         }
                     }
