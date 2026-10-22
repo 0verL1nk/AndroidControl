@@ -50,6 +50,7 @@ class HomeActivity : ComponentActivity() {
                     onOpenDetails = {
                         startActivity(Intent(this, dev.ling.agent.MainActivity::class.java))
                     },
+                    onOpenShizuku = { launcher.openShizuku() },
                     onHelpOther = { token -> openController(token) },
                 )
             }
