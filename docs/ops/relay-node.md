@@ -56,6 +56,21 @@
 
 > 中继的 `GET /` 只返回一行说明文本，不再内嵌网页；前端与中继可以分开部署。
 
+> **也可以让同一条隧道顺便给前端一个域名**（不想另外配 DNS 时）：
+> 在隧道的 `ingress` 里加一条转发到 Vercel，并把 Host 头改写成 Vercel 认识的域名：
+>
+> ```yaml
+> - hostname: assist.<你的域名>
+>   service: https://<你的项目>.vercel.app
+>   originRequest:
+>     httpHostHeader: <你的项目>.vercel.app
+> ```
+>
+> 然后 `cloudflared tunnel route dns ac-relay assist.<你的域名>`。
+> 代价是前端多经过一次节点（Cloudflare → 节点 → Vercel）；介意这一跳的话，
+> 直接在 Cloudflare 加一条 CNAME 指向 `cname.vercel-dns.com` 更好。
+> 注意配置要写在 systemd 服务实际读取的 `/etc/cloudflared/config.yml`。
+
 ---
 
 ## 部署
