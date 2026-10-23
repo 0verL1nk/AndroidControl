@@ -259,8 +259,8 @@ export class RemoteSession {
     // 首个关键帧之前不喂 P 帧：解码器会占住缓冲却解不出画面
     if (!isKey && !this.sawKeyFrame) return;
     if (isKey) this.sawKeyFrame = true;
-    // 落后时丢非关键帧，优先保证延迟
-    if (!isKey && this.decoder.decodeQueueSize > 12) return;
+    // 落后时果断丢非关键帧：延迟优先于完整（远程操作"跟手"比"每一帧都看到"重要）
+    if (!isKey && this.decoder.decodeQueueSize > 6) return;
 
     this.timestamp += 33_333;
     try {

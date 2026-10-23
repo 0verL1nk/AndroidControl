@@ -12,6 +12,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -59,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.ling.agent.session.AgentUiState
 import dev.ling.agent.session.AssistPhase
+import dev.ling.agent.trust.VideoProfile
 import dev.ling.design.Tokens
 
 /**
@@ -80,6 +82,8 @@ fun AgentScreen(
     onRetry: () -> Unit,
     onOpenShizuku: () -> Unit = {},
     onRotateToken: () -> Unit = {},
+    videoProfile: VideoProfile = VideoProfile.HD,
+    onVideoProfile: (VideoProfile) -> Unit = {},
 ) {
     var tapCount by remember { mutableIntStateOf(0) }
     var showAdvanced by remember { mutableStateOf(false) }
@@ -178,7 +182,7 @@ fun AgentScreen(
     }
 
     if (showAdvanced) {
-        AdvancedDialog(state, onRotateToken) { showAdvanced = false }
+        AdvancedDialog(state, videoProfile, onRotateToken, onVideoProfile) { showAdvanced = false }
     }
 }
 
@@ -309,7 +313,9 @@ private fun PrimaryAction(
 @Composable
 private fun AdvancedDialog(
     state: AgentUiState,
+    videoProfile: VideoProfile,
     onRotateToken: () -> Unit,
+    onVideoProfile: (VideoProfile) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val info = state.info
@@ -322,6 +328,21 @@ private fun AdvancedDialog(
                 Text("配对码：${info?.token ?: "—"}", fontSize = 15.sp)
                 Text("控制端口：${info?.controlPort ?: "—"} / 视频：${info?.videoPort ?: "—"}", fontSize = 15.sp)
                 Text("会话号：${info?.scid ?: "—"}", fontSize = 15.sp)
+
+                Spacer(Modifier.height(10.dp))
+                Text("画质（切换会短暂重连）", fontSize = 14.sp)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ProfileChip("流畅 · 720p", videoProfile == VideoProfile.SMOOTH) {
+                        onVideoProfile(VideoProfile.SMOOTH)
+                        onDismiss()
+                    }
+                    ProfileChip("清晰 · 1280p", videoProfile == VideoProfile.HD) {
+                        onVideoProfile(VideoProfile.HD)
+                        onDismiss()
+                    }
+                }
+
                 Spacer(Modifier.height(8.dp))
                 TextButton(onClick = onRotateToken) {
                     Text("重新生成配对码（旧码立即失效）", fontSize = 15.sp)
@@ -330,6 +351,25 @@ private fun AdvancedDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭", fontSize = 17.sp) } },
     )
+}
+
+/** 画质档位选择：选中态用主色容器，避免只靠颜色区分。 */
+@Composable
+private fun ProfileChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) colors.primaryContainer else colors.surfaceContainerHigh,
+    ) {
+        Text(
+            text = if (selected) "✓ $label" else label,
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) colors.onPrimaryContainer else colors.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+    }
 }
 
 private data class Palette(
