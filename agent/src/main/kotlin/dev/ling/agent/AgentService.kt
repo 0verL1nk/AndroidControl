@@ -15,6 +15,7 @@ import dev.ling.agent.session.AgentSession
 import dev.ling.agent.session.AgentUiState
 import dev.ling.agent.session.AssistPhase
 import dev.ling.agent.trust.PairingStore
+import dev.ling.agent.trust.VideoProfile
 import dev.ling.agent.ui.Announcer
 import dev.ling.agent.ui.ControlIndicator
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -74,6 +75,16 @@ class AgentService : Service() {
                 stopSession()
                 stopSelf()
                 return START_NOT_STICKY
+            }
+            ACTION_PROFILE -> {
+                // 画质档位改变了引擎参数：重启会话生效（短暂断开，界面会给出提示）
+                intent.getStringExtra(EXTRA_PROFILE)?.let { name ->
+                    runCatching { PairingStore(this).setVideoProfile(VideoProfile.valueOf(name)) }
+                        .onFailure { Log.w(TAG, "未知画质档位：$name") }
+                }
+                stopSession()
+                startSession()
+                return START_STICKY
             }
             ACTION_ROTATE -> {
                 // 换码即作废旧配对：重启会话会让中继按新哈希重新登记，
@@ -161,7 +172,8 @@ class AgentService : Service() {
             },
         )
         session = created
-        created.start()
+        val profile = PairingStore(this).videoProfile()
+        created.start(profile.maxSize, 30, profile.bitRate)
     }
 
     /** 包名 → 应用名，给长辈看人话而不是包名。 */
@@ -237,6 +249,8 @@ class AgentService : Service() {
         const val ACTION_START = "dev.ling.agent.action.START"
         const val ACTION_STOP = "dev.ling.agent.action.STOP"
         const val ACTION_ROTATE = "dev.ling.agent.action.ROTATE"
+        const val ACTION_PROFILE = "dev.ling.agent.action.PROFILE"
+        const val EXTRA_PROFILE = "profile"
 
         /** 供界面读取的当前状态（服务跨进程不可见，这里用进程内共享）。 */
         @Volatile
@@ -269,6 +283,15 @@ class AgentService : Service() {
         fun stop(context: Context) {
             val intent = Intent(context, AgentService::class.java).setAction(ACTION_STOP)
             context.startService(intent)
+        }
+
+        /** 切换画质档位并重启会话（移动网络丢包时用"流畅"更跟手）。 */
+        fun setVideoProfile(context: Context, profile: VideoProfile) {
+            context.startForegroundService(
+                Intent(context, AgentService::class.java)
+                    .setAction(ACTION_PROFILE)
+                    .putExtra(EXTRA_PROFILE, profile.name),
+            )
         }
 
         /** 换一个新配对码，并让中继按新哈希重新登记。 */

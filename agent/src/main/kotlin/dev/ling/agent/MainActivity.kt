@@ -43,6 +43,8 @@ class MainActivity : ComponentActivity() {
                     onRetry = { launcher.ensureRunning() },
                     onOpenShizuku = { launcher.openShizuku() },
                     onRotateToken = { AgentService.rotateToken(this) },
+                    videoProfile = dev.ling.agent.trust.PairingStore(this).videoProfile(),
+                    onVideoProfile = { profile -> AgentService.setVideoProfile(this, profile) },
                 )
             }
         }
