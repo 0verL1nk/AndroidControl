@@ -9,9 +9,13 @@ use tokio::net::{TcpListener, TcpStream};
 const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 async fn start() -> SocketAddr {
+    start_with_config(ac_relay::LimiterConfig::default()).await
+}
+
+async fn start_with_config(limiter: ac_relay::LimiterConfig) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(ac_relay::serve(listener));
+    tokio::spawn(ac_relay::serve_with_config(listener, limiter));
     addr
 }
 
@@ -128,7 +132,9 @@ async fn help_request_can_be_queried_by_controller() {
 
     // 没按过求助时是 NONE
     let mut ask = connect(addr).await;
-    ask.write_all(format!("ASK {HASH}\n").as_bytes()).await.unwrap();
+    ask.write_all(format!("ASK {HASH}\n").as_bytes())
+        .await
+        .unwrap();
     assert_eq!(read_line_or_timeout(&mut ask).await, "NONE");
 
     // 长辈端登录信令后按"求助"
@@ -142,13 +148,16 @@ async fn help_request_can_be_queried_by_controller() {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let mut ask = connect(addr).await;
-    ask.write_all(format!("ASK {HASH}\n").as_bytes()).await.unwrap();
+    ask.write_all(format!("ASK {HASH}\n").as_bytes())
+        .await
+        .unwrap();
     let reply = read_line_or_timeout(&mut ask).await;
     assert!(reply.starts_with("HELP "), "实际回复：{reply}");
 }
 
 #[tokio::test]
-async fn controller_gets_err_when_agent_is_offline() {    let addr = start().await;
+async fn controller_gets_err_when_agent_is_offline() {
+    let addr = start().await;
 
     let mut controller = connect(addr).await;
     controller
@@ -156,6 +165,63 @@ async fn controller_gets_err_when_agent_is_offline() {    let addr = start().awa
         .await
         .unwrap();
     assert_eq!(read_line_or_timeout(&mut controller).await, "ERR");
+}
+
+/// 口令猜错太多次后，即使长辈端随后上线也拒绝配对；锁定到期后恢复。
+#[tokio::test]
+async fn too_many_failures_lock_the_pairing_code() {
+    let addr = start_with_config(ac_relay::LimiterConfig {
+        max_fails: 2,
+        window_secs: 60,
+        lock_secs: 1,
+    })
+    .await;
+
+    // 长辈端还没上线：两次失败把哈希锁住
+    for _ in 0..2 {
+        let mut controller = connect(addr).await;
+        controller
+            .write_all(format!("FIND {HASH} control\n").as_bytes())
+            .await
+            .unwrap();
+        assert_eq!(read_line_or_timeout(&mut controller).await, "ERR");
+    }
+
+    // 长辈端上线
+    let mut signaling = connect(addr).await;
+    signaling
+        .write_all(format!("AGENT {HASH} signaling\n").as_bytes())
+        .await
+        .unwrap();
+    assert_eq!(read_line_or_timeout(&mut signaling).await, "OK");
+
+    // 锁定期间：即使长辈端在线也不配对，且不通知它开流
+    let mut blocked = connect(addr).await;
+    blocked
+        .write_all(format!("FIND {HASH} control\n").as_bytes())
+        .await
+        .unwrap();
+    assert_eq!(read_line_or_timeout(&mut blocked).await, "ERR");
+    let notified =
+        tokio::time::timeout(Duration::from_millis(500), read_line(&mut signaling)).await;
+    assert!(notified.is_err(), "锁定期间不应再通知长辈端开流");
+
+    // 锁定到期（lock_secs = 1）后恢复正常
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let mut controller = connect(addr).await;
+    controller
+        .write_all(format!("FIND {HASH} control\n").as_bytes())
+        .await
+        .unwrap();
+    assert_eq!(read_line_or_timeout(&mut signaling).await, "OPEN control");
+
+    let mut agent_data = connect(addr).await;
+    agent_data
+        .write_all(format!("DATA {HASH} control\n").as_bytes())
+        .await
+        .unwrap();
+    assert_eq!(read_line_or_timeout(&mut agent_data).await, "OK");
+    assert_eq!(read_line_or_timeout(&mut controller).await, "OK");
 }
 
 #[tokio::test]

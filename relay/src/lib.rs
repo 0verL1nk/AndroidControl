@@ -27,7 +27,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -42,8 +42,7 @@ use base64::Engine as _;
 use sha1::{Digest, Sha1};
 
 /// 中继自己不再内嵌前端：网页控制端在 `web/`（Next.js），单独部署到 Vercel 或任意静态托管。
-const WEB_HINT: &str =
-    "AndroidControl relay is running.
+const WEB_HINT: &str = "AndroidControl relay is running.
 
 Web client: deploy web/ (Next.js). WebSocket endpoint: /ws
 ";
@@ -107,6 +106,140 @@ struct Waiting {
     tx: oneshot::Sender<(OwnedReadHalf, OwnedWriteHalf)>,
 }
 
+/// 口令猜测限速配置。`max_fails == 0` 表示关闭限速。
+#[derive(Clone, Copy, Debug)]
+pub struct LimiterConfig {
+    pub max_fails: u32,
+    pub window_secs: u64,
+    pub lock_secs: u64,
+}
+
+impl Default for LimiterConfig {
+    fn default() -> Self {
+        Self {
+            max_fails: 10,
+            window_secs: 600,
+            lock_secs: 600,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct FailRecord {
+    count: u32,
+    window_started: u64,
+    locked_until: u64,
+}
+
+/// 按口令哈希（主防线）与直连来源 IP（辅助）统计失败。
+///
+/// 浏览器经隧道接入时来源 IP 全是 127.0.0.1，因此 IP 维度只对直连有效，
+/// 真正的防线是哈希维度——它不受来源地址影响。
+#[derive(Default)]
+struct RateLimiter {
+    config: LimiterConfig,
+    by_hash: HashMap<String, FailRecord>,
+    by_ip: HashMap<String, FailRecord>,
+}
+
+impl RateLimiter {
+    fn new(config: LimiterConfig) -> Self {
+        Self {
+            config,
+            ..Default::default()
+        }
+    }
+
+    fn locked(&self, hash: &str, ip: IpAddr) -> bool {
+        if self.config.max_fails == 0 {
+            return false;
+        }
+        let now = epoch_secs();
+        let hash_locked = self
+            .by_hash
+            .get(hash)
+            .is_some_and(|record| record.locked_until > now);
+        let ip_locked = !ip.is_loopback()
+            && self
+                .by_ip
+                .get(&ip.to_string())
+                .is_some_and(|record| record.locked_until > now);
+        hash_locked || ip_locked
+    }
+
+    /// 记一次失败；返回（累计次数，本次是否刚触发锁定及锁定截止时间）。
+    fn record_failure(&mut self, hash: &str, ip: IpAddr) -> (u32, Option<u64>) {
+        if self.config.max_fails == 0 {
+            return (0, None);
+        }
+        let now = epoch_secs();
+        // 长跑节点上限制表大小：窗口已过且未锁定的记录没有意义
+        if self.by_hash.len() > 4096 || self.by_ip.len() > 4096 {
+            let window = self.config.window_secs;
+            let stale = |record: &FailRecord| {
+                record.locked_until <= now && now.saturating_sub(record.window_started) > window
+            };
+            self.by_hash.retain(|_, record| !stale(record));
+            self.by_ip.retain(|_, record| !stale(record));
+        }
+        let mut locked_until = None;
+        let count = bump(
+            self.by_hash.entry(hash.to_string()).or_default(),
+            now,
+            &self.config,
+            &mut locked_until,
+        );
+        if !ip.is_loopback() {
+            bump(
+                self.by_ip.entry(ip.to_string()).or_default(),
+                now,
+                &self.config,
+                &mut locked_until,
+            );
+        }
+        (count, locked_until)
+    }
+
+    /// 配对成功：清掉该哈希与来源 IP 的失败记录。
+    ///
+    /// IP 也要清——否则同一出口（家里路由器、公司网络）猜对一次也可能被
+    /// 之前别人的失败连坐。
+    fn clear(&mut self, hash: &str, ip: IpAddr) {
+        self.by_hash.remove(hash);
+        if !ip.is_loopback() {
+            self.by_ip.remove(&ip.to_string());
+        }
+    }
+}
+
+fn bump(
+    record: &mut FailRecord,
+    now: u64,
+    config: &LimiterConfig,
+    locked_until: &mut Option<u64>,
+) -> u32 {
+    if record.locked_until > now {
+        return record.count;
+    }
+    if record.locked_until != 0 {
+        // 锁定到期后清零，避免"解锁后手误一次又锁十分钟"
+        record.locked_until = 0;
+        record.count = 0;
+        record.window_started = now;
+    }
+    if record.window_started == 0 || now.saturating_sub(record.window_started) > config.window_secs
+    {
+        record.window_started = now;
+        record.count = 0;
+    }
+    record.count += 1;
+    if record.count >= config.max_fails {
+        record.locked_until = now + config.lock_secs;
+        *locked_until = Some(record.locked_until);
+    }
+    record.count
+}
+
 /// 信令连接 + 待配对请求，全部只在内存里。
 #[derive(Default)]
 pub struct Registry {
@@ -115,6 +248,19 @@ pub struct Registry {
     /// 长辈端按下"求助"的时间（Unix 秒）。
     help: HashMap<String, u64>,
     next_id: u64,
+    limiter: RateLimiter,
+    /// 指标：累计连接与配对成功次数（供 /metrics 使用）。
+    connections_total: u64,
+    pairs_total: u64,
+}
+
+impl Registry {
+    fn with_limiter(config: LimiterConfig) -> Self {
+        Self {
+            limiter: RateLimiter::new(config),
+            ..Default::default()
+        }
+    }
 }
 
 impl Registry {
@@ -168,6 +314,7 @@ pub async fn handle_connection(
     registry: Arc<Mutex<Registry>>,
 ) {
     tune(&stream);
+    lock(&registry).connections_total += 1;
     let (mut rd, wr) = stream.into_split();
 
     let Some(line) = read_line_raw(&mut rd, LINE_LIMIT).await else {
@@ -177,7 +324,7 @@ pub async fn handle_connection(
     // 浏览器控制端与健康检查：GET/HEAD/OPTIONS 都走 HTTP 分支
     let method = line.split(' ').next().unwrap_or("");
     if matches!(method, "GET" | "HEAD" | "OPTIONS") {
-        handle_http(rd, wr, line, registry).await;
+        handle_http(rd, wr, line, peer, registry).await;
         return;
     }
 
@@ -192,8 +339,15 @@ pub async fn handle_connection(
             handle_data(rd, wr, parts[1].to_string(), parts[2].to_string(), registry).await;
         }
         FIND_VERB if parts.len() == 3 && is_role(parts[2]) => {
-            handle_controller(rd, wr, parts[1].to_string(), parts[2].to_string(), peer, registry)
-                .await;
+            handle_controller(
+                rd,
+                wr,
+                parts[1].to_string(),
+                parts[2].to_string(),
+                peer,
+                registry,
+            )
+            .await;
         }
         ASK_VERB if parts.len() == 2 => {
             handle_ask(wr, parts[1].to_string(), registry).await;
@@ -288,7 +442,8 @@ async fn handle_signaling(
                 _ => break,
             },
         }
-        idle.as_mut().reset(tokio::time::Instant::now() + SIGNALING_TIMEOUT);
+        idle.as_mut()
+            .reset(tokio::time::Instant::now() + SIGNALING_TIMEOUT);
     }
 
     {
@@ -355,14 +510,22 @@ async fn pair_agent(
         let mut reg = lock(registry);
         reg.next_id += 1;
         let id = reg.next_id;
-        if reg.waiting.insert(key.clone(), Waiting { id, tx }).is_some() {
+        if reg
+            .waiting
+            .insert(key.clone(), Waiting { id, tx })
+            .is_some()
+        {
             // 同一角色只允许一个等待者：后来的顶掉先来的（旧 waiter 的 sender 被丢弃 → 它立刻失败）
             log(format!("{role} 已有等待者，后来的顶掉先来的"));
         }
         id
     };
 
-    if signaling.send(Signal::Open(role.to_string())).await.is_err() {
+    if signaling
+        .send(Signal::Open(role.to_string()))
+        .await
+        .is_err()
+    {
         log("通知长辈端失败，连接可能已失效");
         remove_waiting(registry, &key, id);
         return Err(PairError::Offline);
@@ -387,8 +550,23 @@ async fn handle_controller(
     peer: SocketAddr,
     registry: Arc<Mutex<Registry>>,
 ) {
+    if lock(&registry).limiter.locked(&hash, peer.ip()) {
+        log(format!(
+            "AUDIT pair_blocked hash={} ip={} role={role}",
+            short(&hash),
+            peer.ip()
+        ));
+        let _ = wr.write_all(b"ERR\n").await;
+        return;
+    }
+
     match pair_agent(&hash, &role, &registry).await {
         Ok((agent_rd, agent_wr)) => {
+            {
+                let mut reg = lock(&registry);
+                reg.limiter.clear(&hash, peer.ip());
+                reg.pairs_total += 1;
+            }
             if wr.write_all(b"OK\n").await.is_err() {
                 return;
             }
@@ -400,6 +578,7 @@ async fn handle_controller(
             splice((rd, wr), (agent_rd, agent_wr)).await;
         }
         Err(PairError::Offline) => {
+            note_pair_failure(&registry, &hash, peer.ip(), &role);
             log(format!(
                 "控制端找 {role}（{}…）—— 长辈端不在线",
                 short(&hash)
@@ -407,8 +586,25 @@ async fn handle_controller(
             let _ = wr.write_all(b"ERR\n").await;
         }
         Err(PairError::Timeout) => {
+            note_pair_failure(&registry, &hash, peer.ip(), &role);
             log(format!("等长辈端开 {role} 流超时"));
+            let _ = wr.write_all(b"ERR\n").await;
         }
+    }
+}
+
+/// 记一次配对失败；达到阈值时再输出一条锁定审计。
+///
+/// 只记失败、不记口令本身：日志里是哈希前 8 位与来源 IP。
+fn note_pair_failure(registry: &Arc<Mutex<Registry>>, hash: &str, ip: IpAddr, role: &str) {
+    let (count, locked_until) = lock(registry).limiter.record_failure(hash, ip);
+    log(format!(
+        "AUDIT pair_failed hash={} ip={} role={role} count={count}",
+        short(hash),
+        ip
+    ));
+    if let Some(until) = locked_until {
+        log(format!("AUDIT locked hash={} until={until}", short(hash)));
     }
 }
 
@@ -436,6 +632,7 @@ async fn handle_http(
     mut rd: OwnedReadHalf,
     mut wr: OwnedWriteHalf,
     request_line: String,
+    peer: SocketAddr,
     registry: Arc<Mutex<Registry>>,
 ) {
     let mut headers = Vec::new();
@@ -479,7 +676,7 @@ async fn handle_http(
         if wr.write_all(response.as_bytes()).await.is_err() {
             return;
         }
-        handle_websocket(rd, wr, registry).await;
+        handle_websocket(rd, wr, peer, registry).await;
         return;
     }
 
@@ -576,6 +773,7 @@ async fn write_ws_frame(
 async fn handle_websocket(
     mut rd: OwnedReadHalf,
     mut wr: OwnedWriteHalf,
+    peer: SocketAddr,
     registry: Arc<Mutex<Registry>>,
 ) {
     let Some((opcode, payload)) = read_ws_frame(&mut rd).await else {
@@ -594,13 +792,32 @@ async fn handle_websocket(
     let role = parts[0].to_string();
     let hash = parts[1].to_string();
 
+    if lock(&registry).limiter.locked(&hash, peer.ip()) {
+        log(format!(
+            "AUDIT pair_blocked hash={} ip={} role={role}",
+            short(&hash),
+            peer.ip()
+        ));
+        let _ = write_ws_frame(&mut wr, WS_TEXT, b"ERR").await;
+        return;
+    }
+
     let (mut agent_rd, mut agent_wr) = match pair_agent(&hash, &role, &registry).await {
-        Ok(pair) => pair,
+        Ok(pair) => {
+            {
+                let mut reg = lock(&registry);
+                reg.limiter.clear(&hash, peer.ip());
+                reg.pairs_total += 1;
+            }
+            pair
+        }
         Err(PairError::Offline) => {
+            note_pair_failure(&registry, &hash, peer.ip(), &role);
             let _ = write_ws_frame(&mut wr, WS_TEXT, b"ERR").await;
             return;
         }
         Err(PairError::Timeout) => {
+            note_pair_failure(&registry, &hash, peer.ip(), &role);
             let _ = write_ws_frame(&mut wr, WS_TEXT, b"TIMEOUT").await;
             return;
         }
@@ -684,18 +901,33 @@ fn report_end(direction: &str, result: std::io::Result<u64>) {
 }
 
 fn lock(registry: &Arc<Mutex<Registry>>) -> std::sync::MutexGuard<'_, Registry> {
-    registry.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// 在已绑定好的监听器上跑服务（测试里也用它拿到随机端口）。
 pub async fn serve(listener: TcpListener) {
-    let registry = Arc::new(Mutex::new(Registry::default()));
+    serve_with_config(listener, LimiterConfig::default()).await
+}
+
+/// 带限速配置启动；`main` 与测试都走这里。
+pub async fn serve_with_config(listener: TcpListener, limiter: LimiterConfig) {
+    let registry = Arc::new(Mutex::new(Registry::with_limiter(limiter)));
     log(format!(
-        "配对中继已启动（v2：常连接 + 按需开流），监听 {}",
+        "配对中继已启动（v2：常连接 + 按需开流），监听 {}；配对限速：{}",
         listener
             .local_addr()
             .map(|a| a.to_string())
-            .unwrap_or_else(|_| "?".to_string())
+            .unwrap_or_else(|_| "?".to_string()),
+        if limiter.max_fails == 0 {
+            "关闭".to_string()
+        } else {
+            format!(
+                "{} 次失败/{}s 锁定 {}s",
+                limiter.max_fails, limiter.window_secs, limiter.lock_secs
+            )
+        }
     ));
 
     loop {
@@ -716,8 +948,12 @@ pub async fn serve(listener: TcpListener) {
 
 /// 绑定地址并进入服务循环。
 pub async fn run(addr: SocketAddr) -> std::io::Result<()> {
+    run_with_config(addr, LimiterConfig::default()).await
+}
+
+pub async fn run_with_config(addr: SocketAddr, limiter: LimiterConfig) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    serve(listener).await;
+    serve_with_config(listener, limiter).await;
     Ok(())
 }
 
@@ -746,6 +982,108 @@ mod tests {
         assert_eq!(
             websocket_accept("dGhlIHNhbXBsZSBub25jZQ=="),
             "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        );
+    }
+
+    fn limiter(max_fails: u32, window_secs: u64, lock_secs: u64) -> RateLimiter {
+        RateLimiter::new(LimiterConfig {
+            max_fails,
+            window_secs,
+            lock_secs,
+        })
+    }
+
+    fn ip(value: &str) -> IpAddr {
+        value.parse().unwrap()
+    }
+
+    #[test]
+    fn limiter_locks_after_threshold() {
+        let mut limiter = limiter(3, 60, 60);
+        let peer = ip("203.0.113.7");
+        assert!(!limiter.locked("abcd", peer));
+        assert_eq!(limiter.record_failure("abcd", peer).1, None);
+        assert_eq!(limiter.record_failure("abcd", peer).1, None);
+        let (count, locked_until) = limiter.record_failure("abcd", peer);
+        assert_eq!(count, 3);
+        assert!(locked_until.is_some());
+        assert!(limiter.locked("abcd", peer));
+        // 同一来源的其它口令也会被 IP 维度连带锁住（回环来源除外）
+        assert!(limiter.locked("ef01", peer));
+    }
+
+    #[test]
+    fn limiter_clears_on_success() {
+        let mut limiter = limiter(1, 60, 60);
+        let peer = ip("203.0.113.7");
+        assert!(limiter.record_failure("abcd", peer).1.is_some());
+        assert!(limiter.locked("abcd", peer));
+        limiter.clear("abcd", peer);
+        assert!(!limiter.locked("abcd", peer));
+        assert!(limiter.by_hash.is_empty());
+    }
+
+    #[test]
+    fn limiter_starts_fresh_after_lock_expires() {
+        // lock_secs = 0：锁定立即到期，用来验证"到期后重新计数"
+        let mut limiter = limiter(2, 60, 0);
+        let peer = ip("203.0.113.7");
+        limiter.record_failure("abcd", peer);
+        let (_, locked_until) = limiter.record_failure("abcd", peer);
+        assert_eq!(locked_until, Some(epoch_secs()));
+        assert!(!limiter.locked("abcd", peer), "lock_secs=0 时锁定立即过期");
+        // 到期后计数归零：再失败一次只是重新开始计数
+        let (count, locked_again) = limiter.record_failure("abcd", peer);
+        assert_eq!(count, 1);
+        assert!(locked_again.is_none());
+    }
+
+    #[test]
+    fn limiter_ignores_loopback_for_the_ip_dimension() {
+        let mut limiter = limiter(2, 60, 600);
+        let loopback = ip("127.0.0.1");
+        limiter.record_failure("aaaa", loopback);
+        limiter.record_failure("aaaa", loopback);
+        assert!(limiter.by_ip.is_empty(), "回环来源不参与 IP 维度");
+        // 隧道接入时所有请求都来自回环，不能用 IP 维度连带锁定别的口令
+        assert!(!limiter.locked("bbbb", loopback));
+    }
+
+    #[test]
+    fn limiter_can_be_disabled() {
+        let mut limiter = limiter(0, 60, 600);
+        let peer = ip("203.0.113.7");
+        for _ in 0..50 {
+            assert_eq!(limiter.record_failure("abcd", peer), (0, None));
+        }
+        assert!(!limiter.locked("abcd", peer));
+        assert!(limiter.by_hash.is_empty());
+        assert!(limiter.by_ip.is_empty());
+    }
+
+    #[test]
+    fn limiter_prunes_stale_records() {
+        let mut limiter = limiter(10, 1, 0);
+        let peer = ip("203.0.113.7");
+        limiter.record_failure("abcd", peer);
+        // 人为把窗口推到很久以前，并让表超过清理阈值
+        for record in limiter
+            .by_hash
+            .values_mut()
+            .chain(limiter.by_ip.values_mut())
+        {
+            record.window_started = 1;
+        }
+        for index in 0..5000 {
+            limiter
+                .by_hash
+                .insert(format!("stale{index}"), FailRecord::default());
+        }
+        limiter.record_failure("ef01", peer);
+        assert!(
+            limiter.by_hash.len() < 100,
+            "过期记录应被清理，实际 {}",
+            limiter.by_hash.len()
         );
     }
 }
