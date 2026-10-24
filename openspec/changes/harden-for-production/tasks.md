@@ -47,5 +47,5 @@
 
 ## 8. 版本与收尾
 
-- [ ] 8.1 版本号与 CHANGELOG 更新，打 `v0.3.0` tag（触发 release）
-- [ ] 8.2 更新 `docs/ROADMAP.md`（M6 生产加固）、`SECURITY.md`、README 的部署入口
+- [x] 8.1 版本号与 CHANGELOG 更新，打 `v0.3.0` tag（release 成功，APK 已挂到 GitHub Release）
+- [x] 8.2 更新 `docs/ROADMAP.md`（M6 生产加固）、`SECURITY.md`、README 的部署入口
