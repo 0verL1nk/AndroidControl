@@ -23,11 +23,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // 部署用：am start ... --es relay_host <节点> [--ei relay_port 27180]
+        // 部署用：am start ... --es relay_host <节点> [--ei relay_port 27180]         //          [--es relay_fingerprint <证书 SHA-256>]
         intent?.getStringExtra("relay_host")?.takeIf { it.isNotBlank() }?.let { host ->
             val port = intent.getIntExtra("relay_port", 27180)
-            dev.ling.agent.trust.PairingStore(this).setRelay(host, port)
-            android.util.Log.i("AgentMain", "中继已配置：$host:$port")
+            val store = dev.ling.agent.trust.PairingStore(this)
+            store.setRelay(host, port)
+            store.setRelayFingerprint(intent.getStringExtra("relay_fingerprint"))
+            android.util.Log.i(
+                "AgentMain",
+                "中继已配置：$host:$port（${if (store.relayFingerprint() != null) "TLS 指纹固定" else "明文"}）",
+            )
         }
 
         launcher = AssistLauncher(this)

@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
             intent?.getStringExtra("relay_host")?.takeIf { it.isNotBlank() }?.let {
                 val port = intent.getIntExtra("relay_port", 27180)
                 store.setRelayAddress("$it:$port")
+                store.setRelayFingerprint(intent.getStringExtra("relay_fingerprint"))
                 relay = store.relayAddress()
             }
             val relayHostExtra = intent?.getStringExtra("relay_host")
@@ -74,6 +75,7 @@ class MainActivity : ComponentActivity() {
                     token = tokenExtra,
                     relayHost = relayHostExtra,
                     relayPort = port,
+                    relayFingerprint = store.relayFingerprint(),
                 )
                 store.upsert(device)
                 devices = store.all()
@@ -126,6 +128,7 @@ class MainActivity : ComponentActivity() {
                             token = token,
                             relayHost = host,
                             relayPort = port,
+                            relayFingerprint = store.relayFingerprint(),
                         )
                         store.upsert(bound)
                         store.touch(bound.host)

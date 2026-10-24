@@ -18,6 +18,8 @@ data class DeviceInfo(
     /** 中继节点；为空表示局域网直连。 */
     val relayHost: String? = null,
     val relayPort: Int = 27180,
+    /** 中继证书的 SHA-256 指纹；非空表示中继走 TLS（自签证书固定）。 */
+    val relayFingerprint: String? = null,
     val lastUsedAt: Long = 0L,
 ) {
     val address: String get() = "$host:$controlPort"

@@ -28,18 +28,25 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use socket2::SockRef;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use sha1::{Digest, Sha1};
+
+/// 一对"可读"半连接。明文与 TLS 走同一套协议逻辑，所以在这里把具体类型抹掉。
+pub type ConnRead = Box<dyn AsyncRead + Send + Unpin>;
+/// 一对"可写"半连接。
+pub type ConnWrite = Box<dyn AsyncWrite + Send + Unpin>;
+/// TLS 握手超时：移动网络下也要能在几秒内失败重试，而不是挂着。
+pub const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 中继自己不再内嵌前端：网页控制端在 `web/`（Next.js），单独部署到 Vercel 或任意静态托管。
 const WEB_HINT: &str = "AndroidControl relay is running.
@@ -103,7 +110,7 @@ type SignalTx = mpsc::Sender<Signal>;
 
 struct Waiting {
     id: u64,
-    tx: oneshot::Sender<(OwnedReadHalf, OwnedWriteHalf)>,
+    tx: oneshot::Sender<(ConnRead, ConnWrite)>,
 }
 
 /// 口令猜测限速配置。`max_fails == 0` 表示关闭限速。
@@ -292,7 +299,7 @@ fn tune(stream: &TcpStream) {
 ///
 /// 这里**不能**用带缓冲的读取：握手行之后紧接着就是二进制数据流，
 /// 预读会把流的开头一并吞掉（控制端曾因此出现"设备名乱码、解不出帧"）。
-async fn read_line_raw(rd: &mut OwnedReadHalf, limit: usize) -> Option<String> {
+async fn read_line_raw(rd: &mut ConnRead, limit: usize) -> Option<String> {
     let mut buf = Vec::with_capacity(32);
     loop {
         let byte = rd.read_u8().await.ok()?;
@@ -307,15 +314,27 @@ async fn read_line_raw(rd: &mut OwnedReadHalf, limit: usize) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).trim().to_string())
 }
 
-/// 处理一条新连接：读首行，按动词分流。
+/// 处理一条新的明文连接：调好 TCP，再交给统一的协议入口。
 pub async fn handle_connection(
     stream: TcpStream,
     peer: SocketAddr,
     registry: Arc<Mutex<Registry>>,
 ) {
     tune(&stream);
+    let (rd, wr) = stream.into_split();
+    let rd: ConnRead = Box::new(rd);
+    let wr: ConnWrite = Box::new(wr);
+    handle_stream(rd, wr, peer, registry).await;
+}
+
+/// 协议入口：读首行，按动词分流。明文与 TLS 都从这里进。
+pub async fn handle_stream(
+    mut rd: ConnRead,
+    wr: ConnWrite,
+    peer: SocketAddr,
+    registry: Arc<Mutex<Registry>>,
+) {
     lock(&registry).connections_total += 1;
-    let (mut rd, wr) = stream.into_split();
 
     let Some(line) = read_line_raw(&mut rd, LINE_LIMIT).await else {
         return;
@@ -357,7 +376,7 @@ pub async fn handle_connection(
 }
 
 /// 控制端查询"长辈最近有没有按求助"。回复 `HELP <Unix 秒>` 或 `NONE`。
-async fn handle_ask(mut wr: OwnedWriteHalf, hash: String, registry: Arc<Mutex<Registry>>) {
+async fn handle_ask(mut wr: ConnWrite, hash: String, registry: Arc<Mutex<Registry>>) {
     let now = epoch_secs();
     let reply = {
         let mut reg = lock(&registry);
@@ -381,8 +400,8 @@ fn epoch_secs() -> u64 {
 
 /// 常驻信令连接：处理心跳，并在控制端到来时通知长辈端开流。
 async fn handle_signaling(
-    rd: OwnedReadHalf,
-    mut wr: OwnedWriteHalf,
+    rd: ConnRead,
+    mut wr: ConnWrite,
     hash: String,
     peer: SocketAddr,
     registry: Arc<Mutex<Registry>>,
@@ -462,8 +481,8 @@ async fn handle_signaling(
 
 /// 长辈端按需开出的数据连接：交给正在等的控制端。
 async fn handle_data(
-    rd: OwnedReadHalf,
-    mut wr: OwnedWriteHalf,
+    rd: ConnRead,
+    mut wr: ConnWrite,
     hash: String,
     role: String,
     registry: Arc<Mutex<Registry>>,
@@ -497,7 +516,7 @@ async fn pair_agent(
     hash: &str,
     role: &str,
     registry: &Arc<Mutex<Registry>>,
-) -> Result<(OwnedReadHalf, OwnedWriteHalf), PairError> {
+) -> Result<(ConnRead, ConnWrite), PairError> {
     let signaling = lock(registry)
         .signaling
         .get(hash)
@@ -543,8 +562,8 @@ async fn pair_agent(
 
 /// 控制端找设备：通过信令让长辈端开流，等它连上来后把两条连接对接。
 async fn handle_controller(
-    rd: OwnedReadHalf,
-    mut wr: OwnedWriteHalf,
+    rd: ConnRead,
+    mut wr: ConnWrite,
     hash: String,
     role: String,
     peer: SocketAddr,
@@ -629,8 +648,8 @@ const WS_PONG: u8 = 0xA;
 
 /// 处理 HTTP 请求：`GET /` 给页面，带 `Upgrade: websocket` 的升级成 WebSocket。
 async fn handle_http(
-    mut rd: OwnedReadHalf,
-    mut wr: OwnedWriteHalf,
+    mut rd: ConnRead,
+    mut wr: ConnWrite,
     request_line: String,
     peer: SocketAddr,
     registry: Arc<Mutex<Registry>>,
@@ -703,7 +722,7 @@ fn websocket_accept(key: &str) -> String {
     BASE64.encode(hasher.finalize())
 }
 
-async fn read_ws_frame(rd: &mut OwnedReadHalf) -> Option<(u8, Vec<u8>)> {
+async fn read_ws_frame(rd: &mut ConnRead) -> Option<(u8, Vec<u8>)> {
     let first = rd.read_u8().await.ok()?;
     let second = rd.read_u8().await.ok()?;
     let opcode = first & 0x0F;
@@ -744,7 +763,7 @@ async fn read_ws_frame(rd: &mut OwnedReadHalf) -> Option<(u8, Vec<u8>)> {
 }
 
 async fn write_ws_frame(
-    wr: &mut OwnedWriteHalf,
+    wr: &mut ConnWrite,
     opcode: u8,
     payload: &[u8],
 ) -> std::io::Result<()> {
@@ -771,8 +790,8 @@ async fn write_ws_frame(
 ///
 /// 视频方向：长辈端 → WebSocket 二进制帧；控制方向：WebSocket 二进制帧 → 长辈端。
 async fn handle_websocket(
-    mut rd: OwnedReadHalf,
-    mut wr: OwnedWriteHalf,
+    mut rd: ConnRead,
+    mut wr: ConnWrite,
     peer: SocketAddr,
     registry: Arc<Mutex<Registry>>,
 ) {
@@ -875,8 +894,8 @@ async fn handle_websocket(
 
 /// 两条连接字节级对接，任一方向断开就一起收摊。
 async fn splice(
-    controller: (OwnedReadHalf, OwnedWriteHalf),
-    agent: (OwnedReadHalf, OwnedWriteHalf),
+    controller: (ConnRead, ConnWrite),
+    agent: (ConnRead, ConnWrite),
 ) {
     let (mut controller_rd, mut controller_wr) = controller;
     let (mut agent_rd, mut agent_wr) = agent;
@@ -906,6 +925,26 @@ fn lock(registry: &Arc<Mutex<Registry>>) -> std::sync::MutexGuard<'_, Registry> 
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// 建一份共享的配对表：明文与 TLS 监听器必须用同一份，否则两边配不上对。
+pub fn new_registry(limiter: LimiterConfig) -> Arc<Mutex<Registry>> {
+    log(format!(
+        "配对中继已启动（v2：常连接 + 按需开流）；配对限速：{}",
+        describe_limiter(&limiter)
+    ));
+    Arc::new(Mutex::new(Registry::with_limiter(limiter)))
+}
+
+fn describe_limiter(limiter: &LimiterConfig) -> String {
+    if limiter.max_fails == 0 {
+        "关闭".to_string()
+    } else {
+        format!(
+            "{} 次失败/{}s 锁定 {}s",
+            limiter.max_fails, limiter.window_secs, limiter.lock_secs
+        )
+    }
+}
+
 /// 在已绑定好的监听器上跑服务（测试里也用它拿到随机端口）。
 pub async fn serve(listener: TcpListener) {
     serve_with_config(listener, LimiterConfig::default()).await
@@ -913,21 +952,17 @@ pub async fn serve(listener: TcpListener) {
 
 /// 带限速配置启动；`main` 与测试都走这里。
 pub async fn serve_with_config(listener: TcpListener, limiter: LimiterConfig) {
-    let registry = Arc::new(Mutex::new(Registry::with_limiter(limiter)));
+    serve_with(listener, new_registry(limiter)).await
+}
+
+/// 在监听器上接受明文连接。
+pub async fn serve_with(listener: TcpListener, registry: Arc<Mutex<Registry>>) {
     log(format!(
-        "配对中继已启动（v2：常连接 + 按需开流），监听 {}；配对限速：{}",
+        "明文监听 {}",
         listener
             .local_addr()
             .map(|a| a.to_string())
-            .unwrap_or_else(|_| "?".to_string()),
-        if limiter.max_fails == 0 {
-            "关闭".to_string()
-        } else {
-            format!(
-                "{} 次失败/{}s 锁定 {}s",
-                limiter.max_fails, limiter.window_secs, limiter.lock_secs
-            )
-        }
+            .unwrap_or_else(|_| "?".to_string())
     ));
 
     loop {
@@ -942,6 +977,83 @@ pub async fn serve_with_config(listener: TcpListener, limiter: LimiterConfig) {
         let registry = Arc::clone(&registry);
         tokio::spawn(async move {
             handle_connection(stream, peer, registry).await;
+        });
+    }
+}
+
+/// 读取 PEM 证书链与私钥，构造 TLS 服务端配置。
+///
+/// 自签证书完全够用：控制端靠**指纹固定**认人，不依赖公共 CA。
+pub fn load_tls_server_config(
+    cert_path: &Path,
+    key_path: &Path,
+) -> Result<Arc<rustls::ServerConfig>, String> {
+    let mut cert_reader = std::io::BufReader::new(
+        std::fs::File::open(cert_path)
+            .map_err(|error| format!("打不开证书 {}：{error}", cert_path.display()))?,
+    );
+    let certs = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("证书格式不对（{}）：{error}", cert_path.display()))?;
+    if certs.is_empty() {
+        return Err(format!(
+            "证书文件里没有 PEM 证书：{}",
+            cert_path.display()
+        ));
+    }
+
+    let mut key_reader = std::io::BufReader::new(
+        std::fs::File::open(key_path)
+            .map_err(|error| format!("打不开私钥 {}：{error}", key_path.display()))?,
+    );
+    let key = rustls_pemfile::private_key(&mut key_reader)
+        .map_err(|error| format!("私钥格式不对（{}）：{error}", key_path.display()))?
+        .ok_or_else(|| format!("私钥文件里没有 PEM 私钥：{}", key_path.display()))?;
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|error| format!("证书与私钥不匹配：{error}"))?;
+    Ok(Arc::new(config))
+}
+
+/// 在监听器上接受 TLS 连接：握手完成后再进入与明文完全相同的协议逻辑。
+pub async fn serve_tls(
+    listener: TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+    registry: Arc<Mutex<Registry>>,
+) {
+    log(format!(
+        "TLS 监听 {}",
+        listener
+            .local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| "?".to_string())
+    ));
+
+    loop {
+        let (stream, peer) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(error) => {
+                log(format!("accept 失败（TLS）：{error}"));
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        let acceptor = acceptor.clone();
+        let registry = Arc::clone(&registry);
+        tokio::spawn(async move {
+            tune(&stream);
+            match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
+                Ok(Ok(tls)) => {
+                    let (rd, wr) = tokio::io::split(tls);
+                    let rd: ConnRead = Box::new(rd);
+                    let wr: ConnWrite = Box::new(wr);
+                    handle_stream(rd, wr, peer, registry).await;
+                }
+                Ok(Err(error)) => log(format!("TLS 握手失败（{peer}）：{error}")),
+                Err(_) => log(format!("TLS 握手超时（{peer}）")),
+            }
         });
     }
 }

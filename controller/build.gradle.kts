@@ -7,12 +7,12 @@ plugins {
 
 // 默认中继地址从本地 local.properties 读取（该文件不入库），
 // 这样"自己的构建默认连自己的节点"，而仓库里不出现任何个人基础设施。
-val defaultRelayAddress: String = run {
-    val props = Properties()
+val relayProps = Properties().apply {
     val file = rootProject.file("local.properties")
-    if (file.exists()) file.inputStream().use { props.load(it) }
-    props.getProperty("relay.defaultAddress", "")
+    if (file.exists()) file.inputStream().use { load(it) }
 }
+val defaultRelayAddress: String = relayProps.getProperty("relay.defaultAddress", "")
+val defaultRelayFingerprint: String = relayProps.getProperty("relay.tlsFingerprint", "")
 
 android {
     namespace = "dev.ling.controller"
@@ -29,6 +29,11 @@ android {
 
     defaultConfig {
         buildConfigField("String", "DEFAULT_RELAY_ADDRESS", "\"$defaultRelayAddress\"")
+        buildConfigField(
+            "String",
+            "DEFAULT_RELAY_FINGERPRINT",
+            "\"$defaultRelayFingerprint\"",
+        )
     }
 
     compileOptions {

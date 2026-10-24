@@ -173,17 +173,36 @@ class RemoteSession(
      * 网络往返时延。
      *
      * 直连时发一句 `PROBE` 测完整往返；中继模式下没有设备地址，
-     * 就测**到中继节点的 TCP 握手时间**——那正是操作延迟里最大的那一段。
+     * 就测**到中继节点的连接建立时间**（走 TLS 时含握手）——那正是操作延迟里最大的那一段。
      * 这是网络 RTT，不是端到端画面延迟，界面文案要和它一致。
      */
     private fun measureRtt(): Long = runCatching {
         val start = System.nanoTime()
-        java.net.Socket().use { socket ->
-            val relayHost = device.relayHost
-            if (!relayHost.isNullOrBlank()) {
-                socket.connect(java.net.InetSocketAddress(relayHost, device.relayPort), RTT_TIMEOUT_MS)
+        val relayHost = device.relayHost
+        if (!relayHost.isNullOrBlank()) {
+            val pin = device.relayFingerprint
+            val socket = if (pin.isNullOrBlank()) {
+                java.net.Socket().apply {
+                    connect(
+                        java.net.InetSocketAddress(relayHost, device.relayPort),
+                        RTT_TIMEOUT_MS,
+                    )
+                }
             } else {
-                socket.connect(java.net.InetSocketAddress(device.host, device.controlPort), RTT_TIMEOUT_MS)
+                dev.ling.protocol.TlsSockets.connectPinned(
+                    relayHost,
+                    device.relayPort,
+                    pin,
+                    RTT_TIMEOUT_MS,
+                )
+            }
+            socket.close()
+        } else {
+            java.net.Socket().use { socket ->
+                socket.connect(
+                    java.net.InetSocketAddress(device.host, device.controlPort),
+                    RTT_TIMEOUT_MS,
+                )
                 socket.soTimeout = RTT_TIMEOUT_MS
                 socket.getOutputStream().write("PROBE\n".toByteArray())
                 socket.getOutputStream().flush()

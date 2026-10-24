@@ -33,6 +33,9 @@ class DeviceStore(context: Context) {
                     lastUsedAt = o.optLong("lastUsedAt"),
                     relayHost = o.optString("relayHost").takeIf { it.isNotBlank() },
                     relayPort = o.optInt("relayPort", 27180),
+                    relayFingerprint =
+                        o.optString("relayFingerprint").takeIf { it.isNotBlank() }
+                            ?: relayFingerprint(),
                 )
             }
         }.getOrDefault(emptyList())
@@ -66,6 +69,23 @@ class DeviceStore(context: Context) {
         }.apply()
     }
 
+    /** 中继证书指纹（十六进制）；配置了就走 TLS。留空 = 明文。 */
+    fun relayFingerprint(): String? =
+        prefs.getString(KEY_RELAY_FINGERPRINT, null)?.takeIf { it.isNotBlank() }
+            ?: dev.ling.controller.BuildConfig.DEFAULT_RELAY_FINGERPRINT.takeIf {
+                it.isNotBlank()
+            }
+
+    fun setRelayFingerprint(value: String?) {
+        prefs.edit().apply {
+            if (value.isNullOrBlank()) {
+                remove(KEY_RELAY_FINGERPRINT)
+            } else {
+                putString(KEY_RELAY_FINGERPRINT, value.trim())
+            }
+        }.apply()
+    }
+
     private fun save(list: List<DeviceInfo>) {
         val arr = JSONArray()
         list.forEach { d ->
@@ -81,6 +101,7 @@ class DeviceStore(context: Context) {
                     put("token", d.token)
                     put("relayHost", d.relayHost ?: "")
                     put("relayPort", d.relayPort)
+                    put("relayFingerprint", d.relayFingerprint ?: "")
                     put("lastUsedAt", d.lastUsedAt)
                 }
             )
@@ -91,5 +112,6 @@ class DeviceStore(context: Context) {
     private companion object {
         const val KEY = "list"
         const val KEY_RELAY = "relay_address"
+        const val KEY_RELAY_FINGERPRINT = "relay_fingerprint"
     }
 }
