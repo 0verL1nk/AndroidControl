@@ -226,8 +226,11 @@ adb shell am start -n dev.ling.app/.HomeActivity \
 或在构建时写进 `local.properties`（见上），装出来的 App 默认就连自己的节点。
 设置会持久化，长辈端每次启动都会主动连上去。
 
-**控制端**：连接页直接输 6 位数字；中继与本机指纹来自构建时的默认值，
-也可以 `adb` 用同样的 intent 覆盖。
+**控制端**：连接页右上角「设置 → 中继节点 / 中继证书指纹」填写一次即可，
+之后直接输 6 位数字；也可以 `adb` 用同样的 intent 覆盖。
+
+真机上还需要确认的项（TLS、文本输入、网页语音）见
+[`verify-device.md`](verify-device.md)。
 
 ---
 

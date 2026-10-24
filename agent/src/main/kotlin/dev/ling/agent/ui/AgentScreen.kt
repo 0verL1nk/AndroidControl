@@ -36,6 +36,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -84,6 +85,9 @@ fun AgentScreen(
     onRotateToken: () -> Unit = {},
     videoProfile: VideoProfile = VideoProfile.HD,
     onVideoProfile: (VideoProfile) -> Unit = {},
+    /** 形如 `relay.example.com:27443（TLS）`；null 表示只用局域网。 */
+    relayLabel: String? = null,
+    onSaveRelay: (host: String, port: Int, pin: String?) -> Unit = { _, _, _ -> },
 ) {
     var tapCount by remember { mutableIntStateOf(0) }
     var showAdvanced by remember { mutableStateOf(false) }
@@ -182,7 +186,15 @@ fun AgentScreen(
     }
 
     if (showAdvanced) {
-        AdvancedDialog(state, videoProfile, onRotateToken, onVideoProfile) { showAdvanced = false }
+        AdvancedDialog(
+            state = state,
+            videoProfile = videoProfile,
+            relayLabel = relayLabel,
+            onSaveRelay = onSaveRelay,
+            onRotateToken = onRotateToken,
+            onVideoProfile = onVideoProfile,
+            onDismiss = { showAdvanced = false },
+        )
     }
 }
 
@@ -314,11 +326,16 @@ private fun PrimaryAction(
 private fun AdvancedDialog(
     state: AgentUiState,
     videoProfile: VideoProfile,
+    relayLabel: String?,
+    onSaveRelay: (host: String, port: Int, pin: String?) -> Unit,
     onRotateToken: () -> Unit,
     onVideoProfile: (VideoProfile) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val info = state.info
+    var editingRelay by remember { mutableStateOf(false) }
+    var relayValue by remember { mutableStateOf(relayLabel?.substringBefore('（') ?: "") }
+    var pinValue by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("高级信息", fontSize = 22.sp, fontWeight = FontWeight.Bold) },
@@ -328,6 +345,7 @@ private fun AdvancedDialog(
                 Text("配对码：${info?.token ?: "—"}", fontSize = 15.sp)
                 Text("控制端口：${info?.controlPort ?: "—"} / 视频：${info?.videoPort ?: "—"}", fontSize = 15.sp)
                 Text("会话号：${info?.scid ?: "—"}", fontSize = 15.sp)
+                Text("中继：${relayLabel ?: "未配置（仅局域网）"}", fontSize = 15.sp)
 
                 Spacer(Modifier.height(10.dp))
                 Text("画质（切换会短暂重连）", fontSize = 14.sp)
@@ -341,6 +359,41 @@ private fun AdvancedDialog(
                         onVideoProfile(VideoProfile.HD)
                         onDismiss()
                     }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { editingRelay = !editingRelay }) {
+                    Text(if (editingRelay) "收起中继设置" else "设置中继节点", fontSize = 15.sp)
+                }
+                if (editingRelay) {
+                    OutlinedTextField(
+                        value = relayValue,
+                        onValueChange = { relayValue = it.trim() },
+                        label = { Text("中继节点（host:port）", fontSize = 13.sp) },
+                        placeholder = { Text("<节点地址>:27443", fontSize = 13.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = pinValue,
+                        onValueChange = { pinValue = it.trim() },
+                        label = { Text("证书指纹（可选，留空为明文）", fontSize = 13.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    val host = relayValue.substringBefore(':').trim()
+                    val port = relayValue.substringAfter(':', "").toIntOrNull()
+                    TextButton(
+                        onClick = {
+                            onSaveRelay(
+                                host,
+                                port ?: 27443,
+                                pinValue.takeIf { it.isNotBlank() },
+                            )
+                            onDismiss()
+                        },
+                        enabled = host.isNotBlank(),
+                    ) { Text("保存并重连", fontSize = 15.sp) }
                 }
 
                 Spacer(Modifier.height(8.dp))

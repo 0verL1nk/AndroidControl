@@ -67,6 +67,14 @@ class DeviceStore(context: Context) {
         prefs.edit().apply {
             if (value.isNullOrBlank()) remove(KEY_RELAY) else putString(KEY_RELAY, value.trim())
         }.apply()
+        // 中继是全局设置：已保存的设备也要跟着换，否则改完地址旧设备还连老节点
+        val trimmed = value?.trim().orEmpty()
+        val host = trimmed.substringBefore(':').takeIf { it.isNotBlank() } ?: return
+        val port = trimmed.substringAfter(':', "").toIntOrNull()
+        val list = all()
+        if (list.isNotEmpty()) {
+            save(list.map { it.copy(relayHost = host, relayPort = port ?: it.relayPort) })
+        }
     }
 
     /** 中继证书指纹（十六进制）；配置了就走 TLS。留空 = 明文。 */
@@ -84,6 +92,8 @@ class DeviceStore(context: Context) {
                 putString(KEY_RELAY_FINGERPRINT, value.trim())
             }
         }.apply()
+        val list = all()
+        if (list.isNotEmpty()) save(list.map { it.copy(relayFingerprint = value?.trim()) })
     }
 
     private fun save(list: List<DeviceInfo>) {
