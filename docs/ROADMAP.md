@@ -1,7 +1,8 @@
 # 路线图：远程接管 Android 手机
 
-**最后更新**：2026-10-20
-**当前阶段**：M0–M5 完成；M6（生产加固）进行中，见 OpenSpec 变更 `harden-for-production`
+**最后更新**：2026-10-24
+**当前阶段**：M0–M5 完成；M6（生产加固）代码与节点侧已完成并发布 0.3.0，
+真机复验（TLS/文本输入/网页语音）待设备接上，见 OpenSpec 变更 `harden-for-production`
 
 > 2026-10-20 进展：Rust 中继（`audio` 角色、求助记录、WebSocket）；控制通道独立自愈；
 > 敏感页面红色提示；一键求助；双向语音；息屏自动点亮/唤醒；状态语音播报；
@@ -108,7 +109,7 @@
 - [x] 网页双向语音：AudioWorklet 采集/播放，16 kHz/640B 帧，麦克风开关与错误提示
       （与长辈端联调待真机）
 - [x] 可观测性：`/healthz`、`/metrics`（Prometheus 文本）、运维文档补齐
-- [ ] v0.3.0 发布与文档收尾
+- [x] v0.3.0 发布：签名 APK 已通过 tag 触发 CI 挂到 GitHub Release；README/SECURITY/运维文档同步
 
 ## 验收记录
 
