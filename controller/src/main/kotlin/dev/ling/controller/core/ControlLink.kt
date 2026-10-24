@@ -76,6 +76,8 @@ class ControlLink(private val device: DeviceInfo) {
 
     fun key(keycode: Int) = send { it.key(keycode) }
 
+    fun text(text: String) = send { it.text(text) }
+
     fun scroll(x: Int, y: Int, width: Int, height: Int, hScroll: Float, vScroll: Float) =
         send { it.scroll(x, y, width, height, hScroll, vScroll) }
 

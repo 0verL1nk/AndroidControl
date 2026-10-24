@@ -311,6 +311,16 @@ async function main() {
     assert.deepEqual(arrived, touch, "控制消息应逐字节一致");
     console.log(`✓ 控制 ${touch.length} 字节原样到达长辈端`);
 
+    // 文本输入：01 00000002 "hi"
+    const textMessage = Buffer.from([0x01, 0x00, 0x00, 0x00, 0x02, 0x68, 0x69]);
+    control.send(new Uint8Array(textMessage));
+    assert.deepEqual(
+      await controlReader.bytes(textMessage.length),
+      textMessage,
+      "文本输入字节应一致",
+    );
+    console.log("✓ 文本输入原样到达长辈端");
+
     // ── 两条流互不串线 ─────────────────────────────
     const moreControl = Buffer.from([0x11]); // RESET_VIDEO
     control.send(new Uint8Array(moreControl));

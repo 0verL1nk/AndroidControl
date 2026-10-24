@@ -61,6 +61,19 @@ export function keycodeMessage(action: number, keycode: number): ArrayBuffer {
   return buffer;
 }
 
+/**
+ * 文本输入：1 字节类型 + 4 字节长度（大端）+ UTF-8 字节，**不带**结尾 NUL。
+ * 与 `protocol/ControlMessageWriter.injectText` 逐字节一致。
+ */
+export function injectTextMessage(text: string): Uint8Array {
+  const bytes = new TextEncoder().encode(text);
+  const out = new Uint8Array(5 + bytes.length);
+  out[0] = 1; // INJECT_TEXT
+  new DataView(out.buffer).setUint32(1, bytes.length, false);
+  out.set(bytes, 5);
+  return out;
+}
+
 /** 请求新的关键帧（后连入的客户端需要它才能出画）。 */
 export function resetVideoMessage(): Uint8Array {
   return new Uint8Array([17]);

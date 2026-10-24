@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { ACTION_DOWN, ACTION_MOVE, ACTION_UP, KEYCODES, type KeyName } from "@/lib/scrcpy";
 import type { RemoteSession, SessionState } from "@/lib/remote-session";
+import { WebVoice, type VoiceState } from "@/lib/voice";
 
 const RELAY_STORAGE_KEY = "ac.relayUrl";
 
@@ -29,18 +30,55 @@ export function RemoteAssist() {
   const [detail, setDetail] = useState<string | undefined>(undefined);
   const [fps, setFps] = useState(0);
   const [formError, setFormError] = useState<string | undefined>(undefined);
+  const [text, setText] = useState("");
+  const [voiceState, setVoiceState] = useState<VoiceState>("closed");
+  const [voiceError, setVoiceError] = useState<string | undefined>(undefined);
+  const voiceRef = useRef<WebVoice | null>(null);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(RELAY_STORAGE_KEY);
     if (saved) setRelayUrl(saved);
   }, []);
 
+  const sendText = useCallback(() => {
+    const value = text.trim();
+    if (!value) return;
+    sessionRef.current?.sendText(value);
+    setText("");
+  }, [text]);
+
+  const stopVoice = useCallback(() => {
+    voiceRef.current?.stop();
+    voiceRef.current = null;
+    setVoiceState("closed");
+  }, []);
+
+  const toggleVoice = useCallback(() => {
+    if (voiceRef.current?.active) {
+      stopVoice();
+      return;
+    }
+    const relay = normalizeRelayUrl(relayUrl);
+    const session = sessionRef.current;
+    if (!relay || !session) return;
+    const voice = new WebVoice({
+      relayUrl: relay,
+      onState: (next, reason) => {
+        setVoiceState(next);
+        setVoiceError(reason);
+      },
+    });
+    voiceRef.current = voice;
+    void voice.start(session.tokenHash);
+  }, [relayUrl, stopVoice]);
+
   const stopSession = useCallback(() => {
+    stopVoice();
     sessionRef.current?.stop();
     sessionRef.current = null;
     setState("idle");
     setFps(0);
-  }, []);
+  }, [stopVoice]);
 
   useEffect(() => stopSession, [stopSession]);
 
@@ -158,7 +196,26 @@ export function RemoteAssist() {
             <span className="rounded-full bg-black/50 px-3 py-1 text-neutral-300">
               {fps} fps
             </span>
+            {voiceError && (
+              <span className="rounded-full bg-rose-500/15 px-3 py-1 text-rose-300">
+                {voiceError}
+              </span>
+            )}
             <span className="flex-1" />
+            <button
+              onClick={toggleVoice}
+              className={`pointer-events-auto rounded-full px-3 py-1 transition ${
+                voiceState === "live"
+                  ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+                  : "bg-white/10 text-neutral-200 hover:bg-white/20"
+              }`}
+            >
+              {voiceState === "live"
+                ? "停止语音"
+                : voiceState === "connecting"
+                  ? "连接语音…"
+                  : "语音"}
+            </button>
             <button
               onClick={stopSession}
               className="pointer-events-auto rounded-full bg-white/10 px-3 py-1 text-neutral-200 transition hover:bg-white/20"
@@ -195,7 +252,26 @@ export function RemoteAssist() {
       </main>
 
       {state === "live" && (
-        <footer className="flex justify-evenly gap-2 border-t border-white/5 bg-neutral-900/95 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+        <div className="border-t border-white/5 bg-neutral-900/95">
+          <div className="flex items-center gap-2 px-3 pt-2">
+            <input
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") sendText();
+              }}
+              placeholder="先点中对方输入框，再在这里输入"
+              className="min-w-0 flex-1 rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 outline-none transition focus:border-blue-500"
+            />
+            <button
+              onClick={sendText}
+              disabled={!text.trim()}
+              className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white transition enabled:hover:bg-blue-500 disabled:opacity-40"
+            >
+              发送
+            </button>
+          </div>
+          <footer className="flex justify-evenly gap-2 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-2">
           {CONTROLS.map((control) => (
             <button
               key={control.key}
@@ -207,8 +283,9 @@ export function RemoteAssist() {
             >
               {control.label}
             </button>
-          ))}
-        </footer>
+            ))}
+          </footer>
+        </div>
       )}
     </div>
   );

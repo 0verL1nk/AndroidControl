@@ -4,6 +4,8 @@
 
 - 两条 WebSocket（`video <哈希>` / `control <哈希>`）连到中继的 `/ws`；
 - 浏览器用 **WebCodecs** 解码 H.264，触摸/按键直接发送 scrcpy 控制消息；
+- 文字输入走 `INJECT_TEXT`；语音走 `audio` 角色（16 kHz PCM，MediaRecorder 之外的
+  AudioWorklet 采集/播放，带回声消除）；
 - 只在**安全上下文**（HTTPS 或 `localhost`）下可用，因此线上必须给中继一个 `wss://` 入口。
 
 ## 本地开发

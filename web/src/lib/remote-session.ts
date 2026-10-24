@@ -3,6 +3,7 @@
 import { VideoStreamParser } from "./parse-stream";
 import {
   annexBToAvcc,
+  injectTextMessage,
   keycodeMessage,
   resetVideoMessage,
   splitSpsPps,
@@ -43,6 +44,11 @@ export class RemoteSession {
   private liveAnnounced = false;
   private readonly context: CanvasRenderingContext2D | null;
 
+  /** 口令哈希：语音等旁路通道要用同一个身份连中继。 */
+  get tokenHash(): string {
+    return this.hash;
+  }
+
   constructor(private readonly options: RemoteSessionOptions) {
     this.context = options.canvas.getContext("2d", { alpha: false });
   }
@@ -75,6 +81,12 @@ export class RemoteSession {
   sendKey(keycode: number) {
     this.sendControl(keycodeMessage(0, keycode));
     this.sendControl(keycodeMessage(1, keycode));
+  }
+
+  /** 把整段文字发到对方当前聚焦的输入框（空串不发）。 */
+  sendText(text: string) {
+    if (!text) return;
+    this.sendControl(injectTextMessage(text));
   }
 
   sendTouch(action: number, x: number, y: number) {
