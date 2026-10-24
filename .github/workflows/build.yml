@@ -43,3 +43,31 @@ jobs:
 
       - name: 测试
         run: cargo test --manifest-path relay/Cargo.toml
+
+  e2e:
+    name: 端到端（中继流 + 网页）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 构建中继
+        run: cargo build --release --manifest-path relay/Cargo.toml
+
+      - name: 网页解析单测
+        working-directory: web
+        run: |
+          npm ci
+          npm test
+
+      - name: 网页控制端 E2E（真实中继 + 脚本化长辈端）
+        run: AC_RELAY_BIN=relay/target/release/ac-relay node tools/e2e-web.mjs

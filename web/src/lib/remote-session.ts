@@ -1,5 +1,6 @@
 "use client";
 
+import { VideoStreamParser } from "./parse-stream";
 import {
   annexBToAvcc,
   keycodeMessage,
@@ -30,8 +31,7 @@ export class RemoteSession {
   private decoder?: VideoDecoder;
   private configured = false;
   private configPacket?: Uint8Array;
-  private headerDone = false;
-  private buffer = new Uint8Array(0);
+  private readonly parser = new VideoStreamParser();
   private sawKeyFrame = false;
   private timestamp = 0;
   private videoWidth = 0;
@@ -147,8 +147,7 @@ export class RemoteSession {
   // ── 视频流 ──────────────────────────────────────────────
 
   private resetStream() {
-    this.headerDone = false;
-    this.buffer = new Uint8Array(0);
+    this.parser.reset();
     this.sawKeyFrame = false;
     this.configured = false;
     this.configPacket = undefined;
@@ -167,50 +166,27 @@ export class RemoteSession {
   }
 
   private consume(chunk: Uint8Array) {
-    const merged = new Uint8Array(this.buffer.length + chunk.length);
-    merged.set(this.buffer);
-    merged.set(chunk, this.buffer.length);
-    this.buffer = merged;
-
-    for (;;) {
-      if (!this.headerDone) {
-        if (this.buffer.length < 68) return;
-        const codec = String.fromCharCode(
-          this.buffer[64],
-          this.buffer[65],
-          this.buffer[66],
-          this.buffer[67],
-        );
-        if (codec !== "h264") {
-          this.options.onState("error", `不支持的编码：${codec}`);
-          return;
-        }
-        this.buffer = this.buffer.slice(68);
-        this.headerDone = true;
+    for (const event of this.parser.push(chunk)) {
+      switch (event.kind) {
+        case "header":
+          if (event.codec !== "h264") {
+            this.options.onState("error", `不支持的编码：${event.codec}`);
+            return;
+          }
+          break;
+        case "session":
+          this.videoWidth = event.width;
+          this.videoHeight = event.height;
+          this.configureDecoder();
+          break;
+        case "config":
+          this.configPacket = event.data;
+          this.configureDecoder();
+          break;
+        case "frame":
+          this.decodeFrame(event.data, event.keyframe);
+          break;
       }
-      if (this.buffer.length < 12) return;
-
-      const flags = this.buffer[0];
-      if (flags & 0x80) {
-        // 会话包：宽高是 32 位整数
-        this.videoWidth = readU32(this.buffer, 4);
-        this.videoHeight = readU32(this.buffer, 8);
-        this.buffer = this.buffer.slice(12);
-        this.configureDecoder();
-        continue;
-      }
-
-      const size = readU32(this.buffer, 8);
-      if (this.buffer.length < 12 + size) return;
-      const payload = this.buffer.slice(12, 12 + size);
-      this.buffer = this.buffer.slice(12 + size);
-
-      if (flags & 0x40) {
-        this.configPacket = payload;
-        this.configureDecoder();
-        continue;
-      }
-      this.decodeFrame(payload, (flags & 0x20) !== 0);
     }
   }
 
@@ -300,16 +276,6 @@ export class RemoteSession {
       this.frames = 0;
     }, 1000);
   }
-}
-
-function readU32(buffer: Uint8Array, offset: number): number {
-  return (
-    ((buffer[offset] << 24) |
-      (buffer[offset + 1] << 16) |
-      (buffer[offset + 2] << 8) |
-      buffer[offset + 3]) >>>
-    0
-  );
 }
 
 async function sha256Hex(text: string): Promise<string> {
