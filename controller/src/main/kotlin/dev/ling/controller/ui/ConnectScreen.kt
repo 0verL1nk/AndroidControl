@@ -84,6 +84,8 @@ fun ConnectScreen(
     onConnectManual: (host: String, port: Int, token: String) -> Unit = { _, _, _ -> },
     relayAddress: String? = null,
     onRelayAddressChange: (String) -> Unit = {},
+    relayFingerprint: String? = null,
+    onRelayFingerprintChange: (String?) -> Unit = {},
 ) {
     var token by remember { mutableStateOf("") }
     var settingsOpen by remember { mutableStateOf(false) }
@@ -215,8 +217,10 @@ fun ConnectScreen(
     if (settingsOpen) {
         SettingsDialog(
             relayAddress = relayAddress,
+            relayFingerprint = relayFingerprint,
             busy = busy,
             onRelayAddressChange = onRelayAddressChange,
+            onRelayFingerprintChange = onRelayFingerprintChange,
             onConnectManual = onConnectManual,
             onDismiss = { settingsOpen = false },
         )
@@ -286,12 +290,15 @@ private fun CodeInput(token: String, onChange: (String) -> Unit) {
 @Composable
 private fun SettingsDialog(
     relayAddress: String?,
+    relayFingerprint: String?,
     busy: Boolean,
     onRelayAddressChange: (String) -> Unit,
+    onRelayFingerprintChange: (String?) -> Unit,
     onConnectManual: (host: String, port: Int, token: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var relay by remember { mutableStateOf(relayAddress.orEmpty()) }
+    var fingerprint by remember { mutableStateOf(relayFingerprint.orEmpty()) }
     var host by remember { mutableStateOf("") }
     var manualToken by remember { mutableStateOf("") }
 
@@ -306,6 +313,20 @@ private fun SettingsDialog(
                     label = { Text("中继节点", fontSize = 13.sp) },
                     placeholder = { Text("203.0.113.10:27180", fontSize = 13.sp) },
                     supportingText = { Text("跨网络连接时使用；已填好可不管", fontSize = 11.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = fingerprint,
+                    onValueChange = {
+                        fingerprint = it
+                        onRelayFingerprintChange(it.takeIf { value -> value.isNotBlank() })
+                    },
+                    label = { Text("中继证书指纹（可选）", fontSize = 13.sp) },
+                    placeholder = { Text("AA:BB:CC:…", fontSize = 13.sp) },
+                    supportingText = {
+                        Text("填了就加密连接（SHA-256）；部署脚本会打印", fontSize = 11.sp)
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )

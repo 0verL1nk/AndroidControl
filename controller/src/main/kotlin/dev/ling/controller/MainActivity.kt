@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
         var status by remember { mutableStateOf<String?>(null) }
         var active by remember { mutableStateOf<DeviceInfo?>(null) }
         var relay by remember { mutableStateOf(store.relayAddress()) }
+        var relayFingerprint by remember { mutableStateOf(store.relayFingerprint()) }
 
         // 开发/验收用：am start ... --es host <ip> --es token <6位>
         // 走"手动输入"同一条路径，避免为了自动化去驱动 UI。
@@ -169,6 +170,11 @@ class MainActivity : ComponentActivity() {
                 onRelayAddressChange = { value ->
                     relay = value
                     store.setRelayAddress(value)
+                },
+                relayFingerprint = relayFingerprint,
+                onRelayFingerprintChange = { value ->
+                    relayFingerprint = value
+                    store.setRelayFingerprint(value)
                 },
                 onConnectManual = { host, port, token ->
                     val device = DeviceInfo(

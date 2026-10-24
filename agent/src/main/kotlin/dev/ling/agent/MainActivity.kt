@@ -6,6 +6,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import dev.ling.agent.ui.AgentScreen
 import dev.ling.design.AppTheme
 
@@ -38,9 +41,16 @@ class MainActivity : ComponentActivity() {
         launcher = AssistLauncher(this)
         launcher.register()
 
+        val store = dev.ling.agent.trust.PairingStore(this)
+        fun relayLabel(): String? = store.relayHost()?.let { host ->
+            val tls = if (store.relayFingerprint() != null) "（TLS）" else ""
+            "$host:${store.relayPort()}$tls"
+        }
+
         setContent {
             AppTheme {
                 val state by AgentService.state.collectAsState()
+                var label by remember { mutableStateOf(relayLabel()) }
                 AgentScreen(
                     state = state,
                     onStart = { launcher.ensureRunning() },
@@ -50,6 +60,15 @@ class MainActivity : ComponentActivity() {
                     onRotateToken = { AgentService.rotateToken(this) },
                     videoProfile = dev.ling.agent.trust.PairingStore(this).videoProfile(),
                     onVideoProfile = { profile -> AgentService.setVideoProfile(this, profile) },
+                    relayLabel = label,
+                    onSaveRelay = { host, port, pin ->
+                        store.setRelay(host, port)
+                        store.setRelayFingerprint(pin)
+                        label = relayLabel()
+                        // 新中继要重启会话才会生效
+                        AgentService.stop(this)
+                        window.decorView.postDelayed({ launcher.ensureRunning() }, 700)
+                    },
                 )
             }
         }
