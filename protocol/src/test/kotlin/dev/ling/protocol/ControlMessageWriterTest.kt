@@ -127,4 +127,30 @@ class ControlMessageWriterTest {
             bytes.copyOfRange(2, 10),
         )
     }
+
+    @Test
+    fun `文本输入为类型加长度加 UTF-8 字节`() {
+        // "hi" → 01 00000002 68 69
+        assertBytes(
+            intArrayOf(0x01, 0x00, 0x00, 0x00, 0x02, 0x68, 0x69),
+            ControlMessageWriter.injectText("hi"),
+        )
+    }
+
+    @Test
+    fun `文本长度按 UTF-8 字节数计算`() {
+        // "你好" 是 6 个 UTF-8 字节
+        val chinese = ControlMessageWriter.injectText("你好")
+        assertEquals(5 + 6, chinese.size)
+        assertBytes(intArrayOf(0x01, 0x00, 0x00, 0x00, 0x06), chinese.copyOfRange(0, 5))
+        assertEquals(6, chinese.copyOfRange(5, 11).size)
+
+        // emoji 占 4 字节
+        val emoji = ControlMessageWriter.injectText("😀")
+        assertEquals(5 + 4, emoji.size)
+        assertBytes(intArrayOf(0x01, 0x00, 0x00, 0x00, 0x04), emoji.copyOfRange(0, 5))
+
+        // 空串也要发一个 5 字节的合法消息（清空输入框/删光文字的场景）
+        assertBytes(intArrayOf(0x01, 0x00, 0x00, 0x00, 0x00), ControlMessageWriter.injectText(""))
+    }
 }

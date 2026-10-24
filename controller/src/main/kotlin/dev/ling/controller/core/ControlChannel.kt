@@ -57,6 +57,12 @@ class ControlChannel(
         send(ControlMessageWriter.scroll(x, y, width, height, hScroll, vScroll), droppable = true)
     }
 
+    /** 输入一整段文字（UTF-8，不带结尾 NUL）。空串直接忽略，避免无意义的消息。 */
+    fun text(text: String) {
+        if (text.isEmpty()) return
+        send(ControlMessageWriter.injectText(text), droppable = false)
+    }
+
     /** 请求引擎重新出一个关键帧（见 ControlMessageWriter.resetVideo 的说明）。 */
     fun requestKeyFrame() = send(ControlMessageWriter.resetVideo(), droppable = false)
 

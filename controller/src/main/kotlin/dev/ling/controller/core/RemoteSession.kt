@@ -63,6 +63,9 @@ class RemoteSession(
 
     fun sendKey(keycode: Int) = control?.key(keycode)
 
+    /** 把一整段文字发到对方正在聚焦的输入框。 */
+    fun sendText(text: String) = control?.text(text)
+
     fun sendScroll(viewX: Float, viewY: Float, viewWidth: Float, viewHeight: Float, vScroll: Float) {
         val (fx, fy) = TouchMapper.toFrame(viewX, viewY, viewWidth, viewHeight, frameWidth, frameHeight)
             ?: return

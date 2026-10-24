@@ -123,6 +123,21 @@ object ControlMessageWriter {
      */
     fun resetVideo(): ByteArray = byteArrayOf(TYPE_RESET_VIDEO.toByte())
 
+    /**
+     * 输入文本：1 字节类型 + 32 位长度 + UTF-8 字节（**不带**结尾 NUL）。
+     *
+     * 与 scrcpy 的 `write_inject_text()` 一致。适合"一次发整句"的场景；
+     * 中文、emoji 都按 UTF-8 字节计长度。
+     */
+    fun injectText(text: String): ByteArray {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        val out = ByteArray(5 + bytes.size)
+        out[0] = TYPE_INJECT_TEXT.toByte()
+        putInt(out, 1, bytes.size)
+        bytes.copyInto(out, 5)
+        return out
+    }
+
     /** 把 [-16,16] 的浮点滚动量编码成 16 位整数。 */
     private fun encodeScroll(value: Float): Int {
         val clamped = value.coerceIn(-16f, 16f)

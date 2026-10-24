@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.Mic
@@ -43,6 +44,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -96,6 +98,7 @@ fun ControlScreen(
     var showHud by remember { mutableStateOf(true) }
     var locked by remember { mutableStateOf(false) }
     var confirmDisconnect by remember { mutableStateOf(false) }
+    var textDialog by remember { mutableStateOf(false) }
     var voiceOn by remember { mutableStateOf(false) }
     val voice = remember { VoiceLink(device) }
     val context = LocalContext.current
@@ -214,6 +217,7 @@ fun ControlScreen(
             showHud = showHud,
             onToggleHud = { showHud = !showHud },
             onWake = { session?.sendKey(ControlChannel.Keys.WAKEUP) },
+            onText = { textDialog = true },
             voiceOn = voiceOn,
             onToggleVoice = toggleVoice,
         )
@@ -281,6 +285,43 @@ fun ControlScreen(
         onDispose { session?.stop() }
     }
 
+    if (textDialog) {
+        var text by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { textDialog = false },
+            title = { Text("输入文字", fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        singleLine = false,
+                        placeholder = { Text("输入后发送到对方正在输入的框") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "数字与英文可直接输入；中文等字符取决于对方应用的输入框支持。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        session?.sendText(text)
+                        textDialog = false
+                    },
+                    enabled = text.isNotEmpty(),
+                ) { Text("发送") }
+            },
+            dismissButton = {
+                TextButton(onClick = { textDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
     if (confirmDisconnect) {
         AlertDialog(
             onDismissRequest = { confirmDisconnect = false },
@@ -307,6 +348,7 @@ private fun TopBar(
     showHud: Boolean,
     onToggleHud: () -> Unit,
     onWake: () -> Unit,
+    onText: () -> Unit,
     voiceOn: Boolean,
     onToggleVoice: () -> Unit,
 ) {
@@ -350,6 +392,13 @@ private fun TopBar(
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                     modifier = Modifier.size(16.dp),
+                )
+            }
+            IconButton(onClick = onText, modifier = Modifier.size(34.dp)) {
+                Icon(
+                    Icons.Rounded.Keyboard,
+                    contentDescription = "输入文字",
+                    modifier = Modifier.size(19.dp),
                 )
             }
             IconButton(onClick = onWake, modifier = Modifier.size(34.dp)) {
