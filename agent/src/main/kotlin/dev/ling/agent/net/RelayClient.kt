@@ -1,6 +1,7 @@
 package dev.ling.agent.net
 
 import android.util.Log
+import dev.ling.protocol.TlsSockets
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -27,6 +28,8 @@ class RelayClient(
     private val token: String,
     private val localControlPort: Int,
     private val localVideoPort: Int,
+    /** 非空表示走 TLS，且只接受 SHA-256 指纹匹配的证书（自签即可）。 */
+    private val tlsPin: String? = null,
     private val onState: (String) -> Unit = {},
 ) {
 
@@ -76,9 +79,18 @@ class RelayClient(
         }
     }
 
+    /** 连中继：配了指纹就走 TLS（自签证书 + 指纹固定），否则明文。 */
+    private fun openRelaySocket(connectTimeoutMs: Int): Socket {
+        val pin = tlsPin
+        return if (pin.isNullOrBlank()) {
+            Socket().apply { connect(InetSocketAddress(nodeHost, nodePort), connectTimeoutMs) }
+        } else {
+            TlsSockets.connectPinned(nodeHost, nodePort, pin, connectTimeoutMs)
+        }
+    }
+
     private fun maintainSignaling() {
-        Socket().use { node ->
-            node.connect(InetSocketAddress(nodeHost, nodePort), CONNECT_TIMEOUT_MS)
+        openRelaySocket(CONNECT_TIMEOUT_MS).use { node ->
             node.tcpNoDelay = true
             node.keepAlive = true
             node.soTimeout = HANDSHAKE_TIMEOUT_MS
@@ -146,8 +158,7 @@ class RelayClient(
             else -> localVideoPort to "AUTH"
         }
         try {
-            Socket().use { relay ->
-                relay.connect(InetSocketAddress(nodeHost, nodePort), DATA_CONNECT_TIMEOUT_MS)
+            openRelaySocket(DATA_CONNECT_TIMEOUT_MS).use { relay ->
                 relay.tcpNoDelay = true
                 relay.soTimeout = DATA_HANDSHAKE_TIMEOUT_MS
                 relay.getOutputStream().apply {

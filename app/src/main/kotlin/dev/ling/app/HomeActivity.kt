@@ -32,6 +32,15 @@ class HomeActivity : ComponentActivity() {
         launcher = AssistLauncher(this)
         launcher.register()
 
+        // 部署用：am start ... --es relay_host <节点> [--ei relay_port 27443] \
+        //          [--es relay_fingerprint <证书 SHA-256>]
+        // 与"构建时默认值"走同一份存储；长辈端之后每次启动都会自动连上去。
+        intent?.getStringExtra("relay_host")?.takeIf { it.isNotBlank() }?.let { host ->
+            val store = PairingStore(this)
+            store.setRelay(host, intent.getIntExtra("relay_port", 27180))
+            store.setRelayFingerprint(intent.getStringExtra("relay_fingerprint"))
+        }
+
         // Shizuku 没装/没启动时不去打扰用户：这类设备通常只用来"协助别人"，
         // 状态区会安静地说明"暂时不能被协助"，而不是弹一个错误。
         val shizukuReady = AssistLauncher.shizukuReady()
@@ -69,7 +78,8 @@ class HomeActivity : ComponentActivity() {
 
     /** 协助别人：把口令直接带过去，进入后立即连接。 */
     private fun openController(token: String) {
-        val relay = DeviceStore(this).relayAddress()
+        val store = DeviceStore(this)
+        val relay = store.relayAddress()
         val intent = Intent(this, dev.ling.controller.MainActivity::class.java)
             .putExtra("token", token)
         if (!relay.isNullOrBlank()) {
@@ -78,6 +88,7 @@ class HomeActivity : ComponentActivity() {
                 "relay_port",
                 relay.substringAfter(':', "27180").toIntOrNull() ?: 27180,
             )
+            store.relayFingerprint()?.let { intent.putExtra("relay_fingerprint", it) }
         }
         startActivity(intent)
     }

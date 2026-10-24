@@ -1,6 +1,7 @@
 package dev.ling.agent.trust
 
 import android.content.Context
+import dev.ling.agent.BuildConfig
 import java.security.SecureRandom
 
 /**
@@ -43,10 +44,6 @@ class PairingStore(context: Context) {
         return generated
     }
 
-    /**
-     * 中继节点地址。为空表示只用局域网直连（开发/同网场景）。
-     * 部署时由子女设置一次（可经 intent 传入），之后长辈端每次启动自动连上去。
-     */
     fun videoProfile(): VideoProfile =
         runCatching { VideoProfile.valueOf(prefs.getString(KEY_VIDEO_PROFILE, null).orEmpty()) }
             .getOrDefault(VideoProfile.HD)
@@ -55,12 +52,46 @@ class PairingStore(context: Context) {
         prefs.edit().putString(KEY_VIDEO_PROFILE, profile.name).apply()
     }
 
-    fun relayHost(): String? = prefs.getString(KEY_RELAY_HOST, null)?.takeIf { it.isNotBlank() }
+    /**
+     * 中继节点地址。为空表示只用局域网直连（开发/同网场景）。
+     * 优先用本机配置（intent/高级信息写入），否则用构建时写入的默认节点
+     * （`local.properties` 的 `relay.defaultAddress`，不入库）。
+     */
+    fun relayHost(): String? =
+        prefs.getString(KEY_RELAY_HOST, null)?.takeIf { it.isNotBlank() }
+            ?: BuildConfig.DEFAULT_RELAY_ADDRESS.substringBefore(':').takeIf { it.isNotBlank() }
 
-    fun relayPort(): Int = prefs.getInt(KEY_RELAY_PORT, DEFAULT_RELAY_PORT)
+    fun relayPort(): Int {
+        if (prefs.contains(KEY_RELAY_PORT)) {
+            return prefs.getInt(KEY_RELAY_PORT, DEFAULT_RELAY_PORT)
+        }
+        return BuildConfig.DEFAULT_RELAY_ADDRESS
+            .substringAfter(':', "")
+            .toIntOrNull()
+            ?: DEFAULT_RELAY_PORT
+    }
 
     fun setRelay(host: String, port: Int = DEFAULT_RELAY_PORT) {
         prefs.edit().putString(KEY_RELAY_HOST, host.trim()).putInt(KEY_RELAY_PORT, port).apply()
+    }
+
+    /**
+     * 中继证书的 SHA-256 指纹（十六进制）。非空即走 TLS。
+     * 优先本机配置，其次构建时默认值（`relay.tlsFingerprint`）。
+     */
+    fun relayFingerprint(): String? =
+        prefs.getString(KEY_RELAY_FINGERPRINT, null)?.takeIf { it.isNotBlank() }
+            ?: BuildConfig.DEFAULT_RELAY_FINGERPRINT.takeIf { it.isNotBlank() }
+
+    /** 传 null/空白表示改回明文（仅限内网自建时使用）。 */
+    fun setRelayFingerprint(fingerprint: String?) {
+        val editor = prefs.edit()
+        if (fingerprint.isNullOrBlank()) {
+            editor.remove(KEY_RELAY_FINGERPRINT)
+        } else {
+            editor.putString(KEY_RELAY_FINGERPRINT, fingerprint.trim())
+        }
+        editor.apply()
     }
 
     /** 已绑定的控制端（M1 仅记录，白名单鉴权在后续实现）。 */
@@ -81,6 +112,7 @@ class PairingStore(context: Context) {
         const val KEY_VIDEO_PROFILE = "video_profile"
         const val KEY_RELAY_HOST = "relay_host"
         const val KEY_RELAY_PORT = "relay_port"
+        const val KEY_RELAY_FINGERPRINT = "relay_fingerprint"
         const val DEFAULT_RELAY_PORT = 27180
     }
 }

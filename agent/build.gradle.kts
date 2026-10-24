@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.compose.compiler)
@@ -6,6 +8,16 @@ plugins {
 // 被协助端逻辑（以库的形式并入 :app）。
 // AGP 9 起 Kotlin 支持内置，不再需要 kotlin-android 插件。
 
+// 默认中继与证书指纹从 local.properties 读（不入库），与 :controller 用同一组键：
+//   relay.defaultAddress=relay.example.com:27443
+//   relay.tlsFingerprint=AA:BB:…（证书 SHA-256，留空即明文）
+val relayProps = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val defaultRelayAddress: String = relayProps.getProperty("relay.defaultAddress", "")
+val defaultRelayFingerprint: String = relayProps.getProperty("relay.tlsFingerprint", "")
+
 android {
     namespace = "dev.ling.agent"
     // androidx.core 1.19.1 要求 compileSdk ≥ 37
@@ -13,6 +25,8 @@ android {
 
     defaultConfig {
         minSdk = 26
+        buildConfigField("String", "DEFAULT_RELAY_ADDRESS", "\"$defaultRelayAddress\"")
+        buildConfigField("String", "DEFAULT_RELAY_FINGERPRINT", "\"$defaultRelayFingerprint\"")
     }
 
     // UserService 需要跨进程接口

@@ -16,10 +16,10 @@
 
 ## 3. 传输加密（TLS + 指纹固定）
 
-- [ ] 3.1 中继支持 `--tls-listen/--tls-cert/--tls-key`，同一协议逻辑跑在 TLS 上
-- [ ] 3.2 长辈端 RelayClient 支持 TLS 与证书 SHA-256 指纹校验；PairingStore 增加配置项
-- [ ] 3.3 集成测试：TLS 配对成功、错误指纹拒绝、无 TLS 参数时行为不变
-- [ ] 3.4 部署文档（自签证书、指纹、长辈端配置）并在节点与真机上完成一次 TLS 端到端验证
+- [x] 3.1 中继支持 `--tls-listen/--tls-cert/--tls-key`，同一协议逻辑跑在 TLS 上
+- [x] 3.2 长辈端 RelayClient 支持 TLS 与证书 SHA-256 指纹校验；PairingStore 增加配置项
+- [x] 3.3 集成测试：TLS 配对成功、错误指纹拒绝、无 TLS 参数时行为不变
+- [ ] 3.4 部署文档（自签证书、指纹、长辈端配置）并在节点与真机上完成一次 TLS 端到端验证（文档与节点已验，真机待设备接上后用 `relay_fingerprint` intent 复验）
 
 ## 4. 自动化端到端测试
 

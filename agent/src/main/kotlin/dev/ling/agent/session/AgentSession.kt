@@ -136,6 +136,7 @@ class AgentSession(
                 token = token,
                 localControlPort = controlPort,
                 localVideoPort = videoPort,
+                tlsPin = store.relayFingerprint(),
                 onState = { message ->
                     state(message)
                     val connected = message.contains("对方已连接")

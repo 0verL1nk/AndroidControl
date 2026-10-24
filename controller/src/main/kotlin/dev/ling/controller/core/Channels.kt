@@ -1,5 +1,6 @@
 package dev.ling.controller.core
 
+import dev.ling.protocol.TlsSockets
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
@@ -52,7 +53,7 @@ object Channels {
      * 中继通知长辈端开一条数据连接上来，之后就只是一条透明管道。
      */
     private fun openViaRelay(device: DeviceInfo, role: Role, relayHost: String, timeoutMs: Int): Socket {
-        val socket = connect(relayHost, device.relayPort, timeoutMs)
+        val socket = connect(relayHost, device.relayPort, timeoutMs, device.relayFingerprint)
         val reply = handshake(socket, "FIND ${sha256Hex(device.token)} ${role.wire}")
         if (reply != "OK") {
             socket.close()
@@ -61,12 +62,25 @@ object Channels {
         return socket
     }
 
-    private fun connect(host: String, port: Int, timeoutMs: Int): Socket =
-        Socket().apply {
-            connect(InetSocketAddress(host, port), timeoutMs)
-            soTimeout = 0 // 两条流都是长连接，不做读超时
-            tcpNoDelay = true // 远程操作对延迟敏感，禁用 Nagle
+    private fun connect(
+        host: String,
+        port: Int,
+        timeoutMs: Int,
+        fingerprint: String? = null,
+    ): Socket {
+        // 配了指纹就走 TLS：中继用自签证书，指纹即身份
+        val socket = if (fingerprint.isNullOrBlank()) {
+            Socket()
+        } else {
+            TlsSockets.connectPinned(host, port, fingerprint, timeoutMs)
         }
+        if (socket !is javax.net.ssl.SSLSocket) {
+            socket.connect(InetSocketAddress(host, port), timeoutMs)
+        }
+        socket.soTimeout = 0 // 两条流都是长连接，不做读超时
+        socket.tcpNoDelay = true // 远程操作对延迟敏感，禁用 Nagle
+        return socket
+    }
 
     /**
      * 握手必须**逐字节**读到换行，不能用 BufferedReader：

@@ -1,5 +1,6 @@
 package dev.ling.controller.core
 
+import dev.ling.protocol.TlsSockets
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
@@ -18,8 +19,12 @@ object HelpProbe {
         val relayHost = device.relayHost ?: return null
         if (relayHost.isBlank()) return null
         return runCatching {
-            Socket().use { socket ->
-                socket.connect(InetSocketAddress(relayHost, device.relayPort), TIMEOUT_MS)
+            val opened = device.relayFingerprint?.takeIf { it.isNotBlank() }?.let { pin ->
+                TlsSockets.connectPinned(relayHost, device.relayPort, pin, TIMEOUT_MS)
+            } ?: Socket().apply {
+                connect(InetSocketAddress(relayHost, device.relayPort), TIMEOUT_MS)
+            }
+            opened.use { socket ->
                 socket.soTimeout = TIMEOUT_MS
                 socket.getOutputStream().apply {
                     write("ASK ${sha256Hex(device.token)}\n".toByteArray())
