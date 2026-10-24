@@ -39,7 +39,9 @@ jobs:
           chmod 600 .secrets/release.jks .secrets/keystore.properties
 
       - name: 构建
-        run: ./gradlew :app:assembleRelease --stacktrace
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --stacktrace
 
       - name: 校验签名
         run: |
