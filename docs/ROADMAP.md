@@ -101,7 +101,8 @@
 - [x] TLS + 指纹固定：中继 `--tls-listen`（自签证书，systemd `LoadCredential` 保护私钥）；
       两头 App 支持 `relay_fingerprint`，握手阶段拒绝错误证书；节点已上线（27443），
       公网明文端口已收紧到回环，Kotlin 客户端对真实节点验证通过
-- [ ] 自动化端到端测试（Rust 流测试、网页解析单测、CI E2E job）
+- [x] 自动化端到端测试：Rust 流级测试（逐字节 + 1 MiB 大块）、网页解析单测、
+      `tools/e2e-web.mjs`（真实中继 + 脚本化长辈端 + WebSocket）、CI `e2e` job
 - [ ] 文本输入（`INJECT_TEXT`，App 与网页）
 - [ ] 网页双向语音
 - [ ] 可观测性：`/healthz`、`/metrics`、运维文档补齐

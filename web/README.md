@@ -15,6 +15,17 @@ NEXT_PUBLIC_RELAY_URL=ws://localhost:27180 npm run dev
 
 打开 <http://localhost:3000>，输入对方手机上的 6 位数字即可。
 
+## 测试
+
+```bash
+npm test                              # 流解析单测（node:test + 类型剥离，无额外依赖）
+node ../tools/e2e-web.mjs             # 真实中继 + 脚本化长辈端 + WebSocket 控制器
+```
+
+`src/lib/parse-stream.ts` 是纯函数分帧器（设备头 / 会话包 / 配置包 / 帧），
+`src/lib/scrcpy.ts` 是控制消息与 Annex-B 的字节布局；这两处改动必须保持与
+`protocol/` 逐字节一致。
+
 ## 部署到 Vercel
 
 1. 导入仓库，Root Directory 选 `web/`；

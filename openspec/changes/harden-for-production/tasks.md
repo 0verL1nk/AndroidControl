@@ -23,10 +23,10 @@
 
 ## 4. 自动化端到端测试
 
-- [ ] 4.1 `relay/tests/e2e_stream.rs`：脚本化 agent 发送伪造流头/会话/配置/帧，断言控制器逐字节收到；控制方向同理
-- [ ] 4.2 `tools/e2e-web.mjs`：真实中继 + 脚本化 agent + WebSocket 控制器，验证 video/control 角色
-- [ ] 4.3 网页端抽出 `parse-stream.ts` 纯函数并用 `node:test` 覆盖分片/会话/配置/关键帧
-- [ ] 4.4 CI 增加 E2E job（relay 测试 + web 单测 + e2e-web）
+- [x] 4.1 `relay/tests/e2e_stream.rs`：脚本化 agent 发送伪造流头/会话/配置/帧，断言控制器逐字节收到；控制方向同理
+- [x] 4.2 `tools/e2e-web.mjs`：真实中继 + 脚本化 agent + WebSocket 控制器，验证 video/control 角色
+- [x] 4.3 网页端抽出 `parse-stream.ts` 纯函数并用 `node:test` 覆盖分片/会话/配置/关键帧
+- [x] 4.4 CI 增加 E2E job（relay 测试 + web 单测 + e2e-web）
 
 ## 5. 文本输入
 
