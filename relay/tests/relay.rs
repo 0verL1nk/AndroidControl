@@ -225,6 +225,62 @@ async fn too_many_failures_lock_the_pairing_code() {
 }
 
 #[tokio::test]
+async fn health_and_metrics_endpoints_answer_probes() {
+    let addr = start().await;
+
+    let mut health = connect(addr).await;
+    health
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: relay\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = String::new();
+    health.read_to_string(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "实际：{response}");
+    assert!(response.contains("\"status\":\"ok\""), "实际：{response}");
+    assert!(response.contains("uptime_seconds"));
+
+    let mut metrics = connect(addr).await;
+    metrics
+        .write_all(b"GET /metrics HTTP/1.1\r\nHost: relay\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = String::new();
+    metrics.read_to_string(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "实际：{response}");
+    for metric in [
+        "ac_relay_uptime_seconds",
+        "ac_relay_signaling",
+        "ac_relay_waiting",
+        "ac_relay_help_pending",
+        "ac_relay_connections_total",
+        "ac_relay_pairs_total",
+    ] {
+        assert!(response.contains(metric), "缺少 {metric}：{response}");
+    }
+    // Prometheus 文本格式不接受缩进：指标行必须以 # 或字母开头
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("");
+    for line in body.lines() {
+        assert!(
+            !line.starts_with(' ') && !line.starts_with('\t'),
+            "指标行不应有缩进：{line:?}"
+        );
+    }
+
+    // HEAD 只回头，不带正文（负载均衡/隧道探测常用）
+    let mut head = connect(addr).await;
+    head.write_all(b"HEAD /healthz HTTP/1.1\r\nHost: relay\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = String::new();
+    head.read_to_string(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(
+        !response.contains("\"status\""),
+        "HEAD 不应带正文：{response}"
+    );
+}
+
+#[tokio::test]
 async fn new_signaling_replaces_the_old_one() {
     let addr = start().await;
 

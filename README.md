@@ -49,10 +49,18 @@
 
 ```bash
 # 方式 A（推荐）：配对中继。两台手机都只需要装本 App
-NODE=root@<节点> bash tools/deploy-relay.sh
+# 公网部署请只开 TLS 端口（自动生成自签证书并打印 SHA-256 指纹）
+NODE=root@<节点> TLS_PORT=27443 bash tools/deploy-relay.sh
 
-# 方式 B：WireGuard。要链路加密时用
+# 方式 B：WireGuard。想要链路层加密时用
 sudo bash tools/setup-node.sh
+```
+
+TLS 版本请在构建前把指纹写进 `local.properties`（不入库）：
+
+```properties
+relay.defaultAddress=<节点>:27443
+relay.tlsFingerprint=<部署脚本打印的 SHA-256>
 ```
 
 **2. 两台手机装同一个 App**
@@ -82,6 +90,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 | M3 | 传输优化与安全加固 | ✅ |
 | M4 | 适老体验（求助、敏感页、大字、播报） | ✅ |
 | M5 | 双向语音、多设备、网页控制端 | ✅（iOS 控制端为可选项，未做） |
+| M6 | 生产加固（签名发布、限速、TLS、E2E、文本输入、可观测性） | 🚧 进行中 |
 
 细节与实测数据见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
@@ -96,9 +105,12 @@ bash tools/install-hooks.sh   # 克隆后跑一次：启用提交前个人信息
 ## 项目结构
 
 ```text
-agent/        长辈端 App（自研）
-controller/   控制端 App（fork 自 Miuzarte/ScrcpyForAndroid）
-protocol/     两端共用的协议编解码
+app/          唯一安装包（首页 = 自己的配对码 + 协助别人）
+agent/        被协助逻辑（库）：Shizuku 启动引擎、中继连接、语音/播报
+controller/   控制端逻辑（库，fork 自 Miuzarte/ScrcpyForAndroid）
+protocol/     两端共用的协议编解码与 TLS 指纹校验
+relay/        配对中继（Rust，明文 + TLS 双监听）
+web/          浏览器控制端（Next.js + WebCodecs）
 vendor/       固定版本的 scrcpy-server
 tools/        节点搭建、数据检查等脚本
 specs/        需求、方案、协议契约、任务清单、验证手册

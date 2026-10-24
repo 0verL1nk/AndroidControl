@@ -173,7 +173,9 @@ async fn a_large_payload_survives_the_relay() {
     let (mut controller, mut agent_data) = pair(addr, &mut signaling, "video").await;
 
     // 1 MiB 的伪随机帧：覆盖"读一半就写"的场景
-    let payload: Vec<u8> = (0..1024 * 1024).map(|index| (index * 31 % 251) as u8).collect();
+    let payload: Vec<u8> = (0..1024 * 1024)
+        .map(|index| (index * 31 % 251) as u8)
+        .collect();
     let packet = media_packet(0x20, &payload);
     let expected_len = packet.len();
     let expected = packet.clone();
@@ -184,10 +186,13 @@ async fn a_large_payload_survives_the_relay() {
     });
 
     let mut received = vec![0u8; expected_len];
-    tokio::time::timeout(Duration::from_secs(20), controller.read_exact(&mut received))
-        .await
-        .expect("等大块数据超时")
-        .expect("读取失败");
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        controller.read_exact(&mut received),
+    )
+    .await
+    .expect("等大块数据超时")
+    .expect("读取失败");
     writer.await.unwrap();
     assert_eq!(received, expected);
 }

@@ -33,9 +33,7 @@ fn make_pki() -> TestPki {
 
     let leaf_params = CertificateParams::new(vec![HOST.to_string()]).unwrap();
     let leaf_key = KeyPair::generate().unwrap();
-    let leaf_cert = leaf_params
-        .signed_by(&leaf_key, &ca_cert, &ca_key)
-        .unwrap();
+    let leaf_cert = leaf_params.signed_by(&leaf_key, &ca_cert, &ca_key).unwrap();
 
     TestPki {
         ca_der: ca_cert.der().clone(),
@@ -65,7 +63,9 @@ async fn tls_connect(
     ca: CertificateDer<'static>,
 ) -> std::io::Result<tokio_rustls::client::TlsStream<TcpStream>> {
     let mut roots = RootCertStore::empty();
-    roots.add(ca).map_err(|error| std::io::Error::other(error.to_string()))?;
+    roots
+        .add(ca)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
     let config = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();

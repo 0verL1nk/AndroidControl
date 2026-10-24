@@ -242,6 +242,31 @@ ss -ltn | grep -E '27180|27443'             # 明文应在 127.0.0.1，TLS 在 0
 日志会明确写出每一对连接的结束方向（`控制端→长辈端` 或 `长辈端→控制端` 先断），
 排查"用着用着就断了"时先看这一行。
 
+### 可观测性
+
+| 端点 | 内容 |
+|---|---|
+| `GET /healthz` | 存活探测：`{"status":"ok","uptime_seconds":N}`；`HEAD` 只回头 |
+| `GET /metrics` | Prometheus 文本：uptime、信令连接数、待配对、求助记录、累计连接/配对 |
+
+```bash
+curl -s http://127.0.0.1:27180/healthz
+curl -s http://127.0.0.1:27180/metrics | grep ac_relay_
+```
+
+探测请走 `127.0.0.1:27180`（Cloudflare 隧道后面），或直接对 TLS 端口做 HTTPS 探测；
+**不要用 `FIND` 当健康检查**——它会真的触发配对，还会计入失败限速。
+
+日志全部写 stdout 交给 journald。小盘节点建议限制一下体积：
+
+```bash
+journalctl --vacuum-size=100M
+# 或永久生效：/etc/systemd/journald.conf 里设 SystemMaxUse=100M
+```
+
+`--max-fails` / `--fail-window` / `--lock-secs` 的含义见上面的「配对限速与审计」；
+`--tls-*` 见「TLS」一节。
+
 ---
 
 ## 安全提示

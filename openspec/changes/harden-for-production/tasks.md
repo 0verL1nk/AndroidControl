@@ -42,8 +42,8 @@
 
 ## 7. 可观测性
 
-- [ ] 7.1 中继新增 `GET /healthz` 与 `GET /metrics`（uptime、信令、待配对、求助、连接/配对计数）
-- [ ] 7.2 运维文档：外部探测、journald 轮转、`--max-fails`/TLS 开关说明
+- [x] 7.1 中继新增 `GET /healthz` 与 `GET /metrics`（uptime、信令、待配对、求助、连接/配对计数）
+- [x] 7.2 运维文档：外部探测、journald 轮转、`--max-fails`/TLS 开关说明
 
 ## 8. 版本与收尾
 

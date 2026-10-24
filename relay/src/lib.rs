@@ -30,7 +30,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use socket2::SockRef;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -259,12 +259,15 @@ pub struct Registry {
     /// 指标：累计连接与配对成功次数（供 /metrics 使用）。
     connections_total: u64,
     pairs_total: u64,
+    /// 进程启动时刻（`/metrics` 的 uptime）。
+    started_at: Option<Instant>,
 }
 
 impl Registry {
     fn with_limiter(config: LimiterConfig) -> Self {
         Self {
             limiter: RateLimiter::new(config),
+            started_at: Some(Instant::now()),
             ..Default::default()
         }
     }
@@ -276,6 +279,72 @@ impl Registry {
             "信令 {} 条，待配对 {} 个",
             self.signaling.len(),
             self.waiting.len()
+        )
+    }
+
+    fn uptime_secs(&self) -> u64 {
+        self.started_at
+            .map(|started| started.elapsed().as_secs())
+            .unwrap_or(0)
+    }
+
+    /// `/healthz`：只回答"进程还在、事件循环没卡住"。
+    fn health_json(&self) -> String {
+        format!(
+            "{{\"status\":\"ok\",\"uptime_seconds\":{}}}
+",
+            self.uptime_secs()
+        )
+    }
+
+    /// `/metrics`：Prometheus 文本格式。只暴露进程级计数，不含任何用户数据。
+    fn metrics_text(&self) -> String {
+        let uptime = self.uptime_secs();
+        format!(
+            concat!(
+                "# HELP ac_relay_uptime_seconds 进程运行时长（秒）
+",
+                "# TYPE ac_relay_uptime_seconds gauge
+",
+                "ac_relay_uptime_seconds {}
+",
+                "# HELP ac_relay_signaling 当前常驻信令连接数
+",
+                "# TYPE ac_relay_signaling gauge
+",
+                "ac_relay_signaling {}
+",
+                "# HELP ac_relay_waiting 正在等待长辈端开流的控制端数
+",
+                "# TYPE ac_relay_waiting gauge
+",
+                "ac_relay_waiting {}
+",
+                "# HELP ac_relay_help_pending 30 分钟内有效的求助记录数
+",
+                "# TYPE ac_relay_help_pending gauge
+",
+                "ac_relay_help_pending {}
+",
+                "# HELP ac_relay_connections_total 累计接受的连接数
+",
+                "# TYPE ac_relay_connections_total counter
+",
+                "ac_relay_connections_total {}
+",
+                "# HELP ac_relay_pairs_total 累计配对成功次数
+",
+                "# TYPE ac_relay_pairs_total counter
+",
+                "ac_relay_pairs_total {}
+",
+            ),
+            uptime,
+            self.signaling.len(),
+            self.waiting.len(),
+            self.help.len(),
+            self.connections_total,
+            self.pairs_total
         )
     }
 }
@@ -699,19 +768,31 @@ async fn handle_http(
         return;
     }
 
+    let method = request_line.split(' ').next().unwrap_or("GET");
+    let head_only = method == "HEAD";
     let path = request_line.split(' ').nth(1).unwrap_or("/");
-    if path == "/" || path == "/index.html" {
-        let body = WEB_HINT.as_bytes();
-        let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\r\n",
-            body.len()
-        );
-        let _ = wr.write_all(head.as_bytes()).await;
-        let _ = wr.write_all(body).await;
-    } else {
-        let _ = wr
-            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .await;
+    // 锁只在拼响应体时持有：写 socket 是 await，不能把 MutexGuard 带过去
+    let (status, content_type, body) = {
+        let registry = lock(&registry);
+        match path {
+            "/healthz" => ("200 OK", "application/json", registry.health_json()),
+            "/metrics" => (
+                "200 OK",
+                "text/plain; version=0.0.4; charset=utf-8",
+                registry.metrics_text(),
+            ),
+            "/" | "/index.html" => ("200 OK", "text/plain; charset=utf-8", WEB_HINT.to_string()),
+            _ => ("404 Not Found", "text/plain; charset=utf-8", String::new()),
+        }
+    };
+
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = wr.write_all(head.as_bytes()).await;
+    if !head_only {
+        let _ = wr.write_all(body.as_bytes()).await;
     }
 }
 
@@ -762,11 +843,7 @@ async fn read_ws_frame(rd: &mut ConnRead) -> Option<(u8, Vec<u8>)> {
     Some((opcode, payload))
 }
 
-async fn write_ws_frame(
-    wr: &mut ConnWrite,
-    opcode: u8,
-    payload: &[u8],
-) -> std::io::Result<()> {
+async fn write_ws_frame(wr: &mut ConnWrite, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
     let mut header = [0u8; 10];
     header[0] = 0x80 | opcode;
     let header_len = if payload.len() < 126 {
@@ -893,10 +970,7 @@ async fn handle_websocket(
 }
 
 /// 两条连接字节级对接，任一方向断开就一起收摊。
-async fn splice(
-    controller: (ConnRead, ConnWrite),
-    agent: (ConnRead, ConnWrite),
-) {
+async fn splice(controller: (ConnRead, ConnWrite), agent: (ConnRead, ConnWrite)) {
     let (mut controller_rd, mut controller_wr) = controller;
     let (mut agent_rd, mut agent_wr) = agent;
 
@@ -996,10 +1070,7 @@ pub fn load_tls_server_config(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("证书格式不对（{}）：{error}", cert_path.display()))?;
     if certs.is_empty() {
-        return Err(format!(
-            "证书文件里没有 PEM 证书：{}",
-            cert_path.display()
-        ));
+        return Err(format!("证书文件里没有 PEM 证书：{}", cert_path.display()));
     }
 
     let mut key_reader = std::io::BufReader::new(
