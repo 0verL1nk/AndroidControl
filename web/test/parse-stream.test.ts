@@ -110,3 +110,14 @@ test("大尺寸用 32 位读取（宽高超过 32767 不溢出）", () => {
   const events = parser.push(concat(streamHeader(), sessionPacket(40000, 90000)));
   assert.deepEqual(events[1], { kind: "session", width: 40000, height: 90000 });
 });
+
+test("声明长度超过 4 MiB 的 payload 会让解析器停机", () => {
+  const parser = new VideoStreamParser();
+  const header = new Uint8Array(12);
+  header[0] = 0x20; // 关键帧
+  new DataView(header.buffer).setUint32(8, 4 * 1024 * 1024 + 1);
+  // 只喂包头，长度已经越界，不需要真的构造 4 MiB
+  assert.deepEqual(parser.push(concat(streamHeader(), header)), []);
+  // 停机后不再产出任何事件
+  assert.deepEqual(parser.push(fullStream()), []);
+});

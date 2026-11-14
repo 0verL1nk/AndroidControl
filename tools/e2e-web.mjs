@@ -16,7 +16,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { createServer, connect } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +37,24 @@ function relayBinary() {
   if (!found) {
     console.error(
       "找不到 ac-relay 二进制。先构建：\n  cargo build --release --manifest-path relay/Cargo.toml",
+    );
+    process.exit(2);
+  }
+  // 源码比二进制新时直接失败：否则 E2E 通过的是一个过期的中继
+  const binaryTime = statSync(found).mtimeMs;
+  const sources = [join(ROOT, "relay", "Cargo.toml")];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith(".rs")) sources.push(path);
+    }
+  };
+  walk(join(ROOT, "relay", "src"));
+  const newest = Math.max(...sources.map((path) => statSync(path).mtimeMs));
+  if (newest > binaryTime) {
+    console.error(
+      `中继二进制比源码旧（${found}）。先重新构建，避免用旧二进制跑 E2E：\n  cargo build --release --manifest-path relay/Cargo.toml`,
     );
     process.exit(2);
   }
@@ -123,7 +141,7 @@ async function tcp(port) {
 async function startRelay(port) {
   const binary = relayBinary();
   console.log(`· 中继二进制：${binary}`);
-  const child = spawn(binary, ["--listen", `127.0.0.1:${port}`], {
+  const child = spawn(binary, ["--listen", `127.0.0.1:${port}`, "--allow-all"], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   const logs = [];

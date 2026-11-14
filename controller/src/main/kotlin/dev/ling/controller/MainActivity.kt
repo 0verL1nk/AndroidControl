@@ -56,16 +56,19 @@ class MainActivity : ComponentActivity() {
         // 走"手动输入"同一条路径，避免为了自动化去驱动 UI。
         remember {
             intent?.getStringExtra("relay_host")?.takeIf { it.isNotBlank() }?.let {
-                val port = intent.getIntExtra("relay_port", 27180)
+                val port = intent.getIntExtra("relay_port", 27443)
                 store.setRelayAddress("$it:$port")
-                store.setRelayFingerprint(intent.getStringExtra("relay_fingerprint"))
+                // 没带指纹就别动：否则会把已固定的指纹静默清掉，降级成明文
+                if (intent.hasExtra("relay_fingerprint")) {
+                    store.setRelayFingerprint(intent.getStringExtra("relay_fingerprint"))
+                }
                 relay = store.relayAddress()
             }
             val relayHostExtra = intent?.getStringExtra("relay_host")
             val tokenExtra = intent?.getStringExtra("token")
             if (!relayHostExtra.isNullOrBlank() && !tokenExtra.isNullOrBlank()) {
                 // 只给中继 + 口令：这就是"打开就能连"的形态
-                val port = intent.getIntExtra("relay_port", 27180)
+                val port = intent.getIntExtra("relay_port", 27443)
                 store.setRelayAddress("$relayHostExtra:$port")
                 relay = store.relayAddress()
                 val device = DeviceInfo(
@@ -101,7 +104,7 @@ class MainActivity : ComponentActivity() {
             ControlScreen(
                 device = current,
                 onExit = { reason ->
-                    store.touch(current.host)
+                    store.touch(current.host, current.token)
                     devices = store.all()
                     status = reason
                     active = null
@@ -120,7 +123,7 @@ class MainActivity : ComponentActivity() {
                     if (!relayValue.isNullOrBlank()) {
                         // 配了中继：不需要地址、不需要同网段，输数字就能连
                         val host = relayValue.substringBefore(':')
-                        val port = relayValue.substringAfter(':', "27180").toIntOrNull() ?: 27180
+                        val port = relayValue.substringAfter(':', "27443").toIntOrNull() ?: 27443
                         val bound = DeviceInfo(
                             host = host,
                             controlPort = devicePortUnused,
@@ -132,7 +135,7 @@ class MainActivity : ComponentActivity() {
                             relayFingerprint = store.relayFingerprint(),
                         )
                         store.upsert(bound)
-                        store.touch(bound.host)
+                        store.touch(bound.host, bound.token)
                         devices = store.all()
                         status = null
                         active = bound
@@ -150,7 +153,7 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 val bound = found.copy(token = token)
                                 store.upsert(bound)
-                                store.touch(bound.host)
+                                store.touch(bound.host, bound.token)
                                 devices = store.all()
                                 status = null
                                 active = bound
@@ -163,7 +166,7 @@ class MainActivity : ComponentActivity() {
                     active = device
                 },
                 onForget = { device ->
-                    store.remove(device.host)
+                    store.remove(device.host, device.token)
                     devices = store.all()
                 },
                 relayAddress = relay,

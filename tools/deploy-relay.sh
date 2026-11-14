@@ -58,6 +58,20 @@ cd /opt/ac-build/relay
 ~/.cargo/bin/cargo build --release
 install -m755 target/release/ac-relay /usr/local/bin/ac-relay
 
+# 管理令牌：首次部署生成一次，之后沿用；只给 root 可读，经 EnvironmentFile 交给服务
+mkdir -p /etc/ac-relay
+chmod 700 /etc/ac-relay
+command -v openssl >/dev/null 2>&1 || apt-get install -y -qq --no-install-recommends openssl >/dev/null
+ADMIN_ENV=/etc/ac-relay/admin.env
+if [ ! -s "$ADMIN_ENV" ]; then
+    umask 077
+    echo "AC_ADMIN_TOKEN=$(openssl rand -hex 24)" > "$ADMIN_ENV"
+    chmod 600 "$ADMIN_ENV"
+    echo "已生成管理令牌（不打印到日志）。查看：ssh <节点> 'sudo grep AC_ADMIN_TOKEN /etc/ac-relay/admin.env'"
+else
+    echo "管理令牌已存在：$ADMIN_ENV（查看：grep AC_ADMIN_TOKEN $ADMIN_ENV）"
+fi
+
 # TLS：自签证书只生成一次；私钥经 systemd LoadCredential 传给服务，不设全局可读
 TLS_ARGS=""
 TLS_CREDENTIALS=""
@@ -83,8 +97,10 @@ Description=AndroidControl relay
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/ac-relay --listen ${LISTEN_ADDR} ${TLS_ARGS}
+ExecStart=/usr/local/bin/ac-relay --listen ${LISTEN_ADDR} --state /var/lib/ac-relay/devices.tsv ${TLS_ARGS}
+EnvironmentFile=/etc/ac-relay/admin.env
 ${TLS_CREDENTIALS}
+StateDirectory=ac-relay
 Restart=always
 RestartSec=5
 DynamicUser=yes
@@ -98,9 +114,29 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable ac-relay >/dev/null 2>&1 || true
+systemctl enable ac-relay
 systemctl restart ac-relay
-sleep 1
+
+# 确认真的起来了（只看 is-active 会漏掉"启动即崩但 systemd 还在重试"的情况）
+PORT="${LISTEN_ADDR##*:}"
+ready=0
+for _ in $(seq 1 20); do
+    if systemctl is-active --quiet ac-relay && ss -ltn | grep -q ":${PORT} "; then
+        ready=1
+        break
+    fi
+    sleep 0.5
+done
+if [ "$ready" -ne 1 ]; then
+    echo "服务未能就绪，最近日志：" >&2
+    journalctl -u ac-relay -n 30 --no-pager -o cat >&2
+    exit 1
+fi
+if [ -n "$TLS_PORT" ] && ! ss -ltn | grep -q ":${TLS_PORT} "; then
+    echo "TLS 端口 ${TLS_PORT} 没有在监听" >&2
+    journalctl -u ac-relay -n 30 --no-pager -o cat >&2
+    exit 1
+fi
 echo "服务状态：$(systemctl is-active ac-relay)"
 journalctl -u ac-relay -n 3 --no-pager -o cat
 

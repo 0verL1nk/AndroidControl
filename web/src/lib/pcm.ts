@@ -26,3 +26,28 @@ export function float32ToPcm16(samples: Float32Array): Uint8Array {
   }
   return bytes;
 }
+
+/**
+ * 累积跨消息分片的 PCM：WebSocket 消息可能在任意字节边界切开（中继按块转发），
+ * 所以只解码完整的 16 位样本，落单的字节留到下一块，保证奇偶对齐。
+ */
+export function feedPcm16(
+  pending: Uint8Array,
+  chunk: Uint8Array,
+): { samples: Float32Array; pending: Uint8Array } {
+  const total = pending.length + chunk.length;
+  if (total < 2) {
+    const rest = new Uint8Array(total);
+    rest.set(pending);
+    rest.set(chunk, pending.length);
+    return { samples: new Float32Array(0), pending: rest };
+  }
+  const bytes = new Uint8Array(total);
+  bytes.set(pending);
+  bytes.set(chunk, pending.length);
+  const whole = total - (total % 2);
+  return {
+    samples: pcm16ToFloat32(bytes.subarray(0, whole)),
+    pending: bytes.slice(whole),
+  };
+}

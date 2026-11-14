@@ -17,7 +17,7 @@ data class DeviceInfo(
     val token: String = "",
     /** 中继节点；为空表示局域网直连。 */
     val relayHost: String? = null,
-    val relayPort: Int = 27180,
+    val relayPort: Int = 27443,
     /** 中继证书的 SHA-256 指纹；非空表示中继走 TLS（自签证书固定）。 */
     val relayFingerprint: String? = null,
     val lastUsedAt: Long = 0L,

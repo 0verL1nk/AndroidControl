@@ -32,29 +32,38 @@ class DeviceStore(context: Context) {
                     token = o.optString("token"),
                     lastUsedAt = o.optLong("lastUsedAt"),
                     relayHost = o.optString("relayHost").takeIf { it.isNotBlank() },
-                    relayPort = o.optInt("relayPort", 27180),
+                    relayPort = o.optInt("relayPort", 27443),
                     relayFingerprint =
-                        o.optString("relayFingerprint").takeIf { it.isNotBlank() }
-                            ?: relayFingerprint(),
+                        if (o.has("relayFingerprint")) {
+                            // 显式存了空串 = 用户选择明文，不要再回落到默认指纹
+                            o.optString("relayFingerprint").takeIf { it.isNotBlank() }
+                        } else {
+                            relayFingerprint()
+                        },
                 )
             }
         }.getOrDefault(emptyList())
     }
 
-    /** 以地址为唯一键：同一台设备重复配对时覆盖，不产生重复条目。 */
+    /**
+     * 以 (地址, 口令) 为唯一键：同一台设备重复配对时覆盖，不产生重复条目。
+     * 不能只用地址——走中继的多台长辈 host 都是同一个中继节点，会互相覆盖。
+     */
     fun upsert(device: DeviceInfo) {
         val list = all().toMutableList()
-        val index = list.indexOfFirst { it.host == device.host }
+        val index = list.indexOfFirst { it.host == device.host && it.token == device.token }
         if (index >= 0) list[index] = device else list.add(device)
         save(list)
     }
 
-    fun remove(host: String) {
-        save(all().filterNot { it.host == host })
+    fun remove(host: String, token: String) {
+        save(all().filterNot { it.host == host && it.token == token })
     }
 
-    fun touch(host: String, at: Long = System.currentTimeMillis()) {
-        val list = all().map { if (it.host == host) it.copy(lastUsedAt = at) else it }
+    fun touch(host: String, token: String, at: Long = System.currentTimeMillis()) {
+        val list = all().map {
+            if (it.host == host && it.token == token) it.copy(lastUsedAt = at) else it
+        }
         save(list)
     }
 

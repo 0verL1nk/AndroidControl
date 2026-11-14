@@ -26,12 +26,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // 部署用：am start ... --es relay_host <节点> [--ei relay_port 27180]         //          [--es relay_fingerprint <证书 SHA-256>]
+        // 部署用：am start ... --es relay_host <节点> [--ei relay_port 27443]
+        //          [--es relay_fingerprint <证书 SHA-256>]
         intent?.getStringExtra("relay_host")?.takeIf { it.isNotBlank() }?.let { host ->
-            val port = intent.getIntExtra("relay_port", 27180)
+            val port = intent.getIntExtra("relay_port", 27443)
             val store = dev.ling.agent.trust.PairingStore(this)
             store.setRelay(host, port)
-            store.setRelayFingerprint(intent.getStringExtra("relay_fingerprint"))
+            // 没带指纹就别动：否则会把已固定的指纹静默清掉，降级成明文
+            if (intent.hasExtra("relay_fingerprint")) {
+                store.setRelayFingerprint(intent.getStringExtra("relay_fingerprint"))
+            }
             android.util.Log.i(
                 "AgentMain",
                 "中继已配置：$host:$port（${if (store.relayFingerprint() != null) "TLS 指纹固定" else "明文"}）",

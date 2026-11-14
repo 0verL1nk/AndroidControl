@@ -311,7 +311,7 @@ private fun SettingsDialog(
                     value = relay,
                     onValueChange = { relay = it; onRelayAddressChange(it) },
                     label = { Text("中继节点", fontSize = 13.sp) },
-                    placeholder = { Text("203.0.113.10:27180", fontSize = 13.sp) },
+                    placeholder = { Text("203.0.113.10:27443", fontSize = 13.sp) },
                     supportingText = { Text("跨网络连接时使用；已填好可不管", fontSize = 11.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),

@@ -80,18 +80,17 @@ class PairingStore(context: Context) {
      * 优先本机配置，其次构建时默认值（`relay.tlsFingerprint`）。
      */
     fun relayFingerprint(): String? =
-        prefs.getString(KEY_RELAY_FINGERPRINT, null)?.takeIf { it.isNotBlank() }
-            ?: BuildConfig.DEFAULT_RELAY_FINGERPRINT.takeIf { it.isNotBlank() }
+        if (prefs.contains(KEY_RELAY_FINGERPRINT)) {
+            // 显式存过就用存储值：空串 = 用户主动改成明文，不能再回落成默认指纹
+            prefs.getString(KEY_RELAY_FINGERPRINT, null)?.takeIf { it.isNotBlank() }
+        } else {
+            BuildConfig.DEFAULT_RELAY_FINGERPRINT.takeIf { it.isNotBlank() }
+        }
 
     /** 传 null/空白表示改回明文（仅限内网自建时使用）。 */
     fun setRelayFingerprint(fingerprint: String?) {
-        val editor = prefs.edit()
-        if (fingerprint.isNullOrBlank()) {
-            editor.remove(KEY_RELAY_FINGERPRINT)
-        } else {
-            editor.putString(KEY_RELAY_FINGERPRINT, fingerprint.trim())
-        }
-        editor.apply()
+        // 空串也要落盘，用来区分"没设置过"和"显式改成明文"
+        prefs.edit().putString(KEY_RELAY_FINGERPRINT, fingerprint?.trim().orEmpty()).apply()
     }
 
     /** 已绑定的控制端（M1 仅记录，白名单鉴权在后续实现）。 */
@@ -113,6 +112,7 @@ class PairingStore(context: Context) {
         const val KEY_RELAY_HOST = "relay_host"
         const val KEY_RELAY_PORT = "relay_port"
         const val KEY_RELAY_FINGERPRINT = "relay_fingerprint"
-        const val DEFAULT_RELAY_PORT = 27180
+        /** 公网中继只开 TLS 端口；27180 只是节点上给网页端用的本机回环端口。 */
+        const val DEFAULT_RELAY_PORT = 27443
     }
 }

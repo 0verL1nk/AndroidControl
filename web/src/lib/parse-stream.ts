@@ -27,6 +27,8 @@ const DEVICE_NAME_LENGTH = 64;
 const CODEC_LENGTH = 4;
 const STREAM_HEADER = DEVICE_NAME_LENGTH + CODEC_LENGTH; // 68
 const PACKET_HEADER = 12;
+/** 与中继的 MAX_WS_FRAME 对齐：超过这个长度的 payload 一定不可信。 */
+const MAX_PAYLOAD = 4 * 1024 * 1024;
 
 const FLAG_SESSION = 0x80;
 const FLAG_CONFIG = 0x40;
@@ -35,7 +37,7 @@ const FLAG_KEYFRAME = 0x20;
 export class VideoStreamParser {
   private buffer = new Uint8Array(0);
   private headerDone = false;
-  /** 遇到不认识的编码后停止解析，直到 reset（重新建会话）。 */
+  /** 遇到不认识的编码或超长 payload 后停止解析，直到 reset（重新建会话）。 */
   private broken = false;
 
   reset() {
@@ -90,6 +92,12 @@ export class VideoStreamParser {
       }
 
       const size = readU32(this.buffer, 8);
+      if (size > MAX_PAYLOAD) {
+        // 长度来自不可信输入：超上限说明流已不可信，停机等重建会话
+        this.buffer = new Uint8Array(0);
+        this.broken = true;
+        return [];
+      }
       if (this.buffer.length < PACKET_HEADER + size) break;
       const data = this.buffer.slice(PACKET_HEADER, PACKET_HEADER + size);
       this.buffer = this.buffer.slice(PACKET_HEADER + size);

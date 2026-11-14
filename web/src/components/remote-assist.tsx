@@ -82,7 +82,13 @@ export function RemoteAssist() {
 
   useEffect(() => stopSession, [stopSession]);
 
+  // 画面不在直播中（断开/重连/出错）就不能让麦克风继续开着
+  useEffect(() => {
+    if (state !== "live") stopVoice();
+  }, [state, stopVoice]);
+
   const connect = useCallback(async () => {
+    stopVoice();
     const trimmedToken = token.trim();
     const relay = normalizeRelayUrl(relayUrl);
     if (!/^\d{6}$/.test(trimmedToken)) {
@@ -126,7 +132,7 @@ export function RemoteAssist() {
     });
     sessionRef.current = session;
     await session.connect(trimmedToken);
-  }, [relayUrl, token]);
+  }, [relayUrl, token, stopVoice]);
 
   const sendTouch = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>, action: number) => {

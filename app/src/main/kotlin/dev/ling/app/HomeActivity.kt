@@ -37,8 +37,11 @@ class HomeActivity : ComponentActivity() {
         // 与"构建时默认值"走同一份存储；长辈端之后每次启动都会自动连上去。
         intent?.getStringExtra("relay_host")?.takeIf { it.isNotBlank() }?.let { host ->
             val store = PairingStore(this)
-            store.setRelay(host, intent.getIntExtra("relay_port", 27180))
-            store.setRelayFingerprint(intent.getStringExtra("relay_fingerprint"))
+            store.setRelay(host, intent.getIntExtra("relay_port", 27443))
+            // 没带指纹就别动：否则会把已固定的指纹静默清掉，降级成明文
+            if (intent.hasExtra("relay_fingerprint")) {
+                store.setRelayFingerprint(intent.getStringExtra("relay_fingerprint"))
+            }
         }
 
         // Shizuku 没装/没启动时不去打扰用户：这类设备通常只用来"协助别人"，
@@ -86,7 +89,7 @@ class HomeActivity : ComponentActivity() {
             intent.putExtra("relay_host", relay.substringBefore(':'))
             intent.putExtra(
                 "relay_port",
-                relay.substringAfter(':', "27180").toIntOrNull() ?: 27180,
+                relay.substringAfter(':', "27443").toIntOrNull() ?: 27443,
             )
             store.relayFingerprint()?.let { intent.putExtra("relay_fingerprint", it) }
         }

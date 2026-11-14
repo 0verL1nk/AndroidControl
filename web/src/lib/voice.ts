@@ -12,7 +12,7 @@
  * - 播放：有界队列（最多 8 帧），网络抖动时丢旧帧，避免越积越延迟。
  */
 
-import { pcm16ToFloat32 } from "./pcm";
+import { feedPcm16 } from "./pcm";
 
 export type VoiceState = "closed" | "connecting" | "live" | "error";
 
@@ -25,6 +25,7 @@ export interface VoiceOptions {
 const SAMPLE_RATE = 16_000;
 const FRAME_SAMPLES = 320;
 const PLAYER_QUEUE_LIMIT = 8;
+const SEND_BUFFER_LIMIT = 64 * 1024;
 
 const CAPTURE_WORKLET = `
 class CaptureProcessor extends AudioWorkletProcessor {
@@ -69,33 +70,44 @@ const PLAYER_WORKLET = `
 class PlayerProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
+    // 声卡采样率通常不是 16k：按 sampleRate/16000 线性插值，否则会以 3 倍速播放
+    this.ratio = sampleRate / 16000;
     this.queue = [];
-    this.offset = 0;
+    this.pos = 0;
     this.port.onmessage = (event) => {
       this.queue.push(event.data);
       // 网络抖动时丢最旧的帧，宁可断一下也不要越积越延迟
-      while (this.queue.length > 8) this.queue.shift();
+      while (this.queue.length > ${PLAYER_QUEUE_LIMIT}) this.queue.shift();
     };
   }
   process(inputs, outputs) {
     const output = outputs[0] && outputs[0][0];
     if (!output) return true;
-    let written = 0;
-    while (written < output.length) {
-      const current = this.queue[0];
-      if (!current) {
-        output.fill(0, written);
-        return true;
-      }
-      const take = Math.min(output.length - written, current.length - this.offset);
-      output.set(current.subarray(this.offset, this.offset + take), written);
-      written += take;
-      this.offset += take;
-      if (this.offset >= current.length) {
-        this.queue.shift();
-        this.offset = 0;
-      }
+    let total = 0;
+    for (const frame of this.queue) total += frame.length;
+    if (total < 2) {
+      output.fill(0);
+      return true;
     }
+    // 合并后从同一相位插值，跨帧/跨消息边界也不会产生跳变
+    const data = new Float32Array(total);
+    let offset = 0;
+    for (const frame of this.queue) {
+      data.set(frame, offset);
+      offset += frame.length;
+    }
+    let written = 0;
+    let pos = this.pos;
+    while (written < output.length && pos < data.length - 1) {
+      const index = Math.floor(pos);
+      const frac = pos - index;
+      output[written++] = data[index] * (1 - frac) + data[index + 1] * frac;
+      pos += this.ratio;
+    }
+    if (written < output.length) output.fill(0, written);
+    const consumed = Math.floor(pos);
+    this.queue = consumed >= data.length ? [] : [data.slice(consumed)];
+    this.pos = pos - consumed;
     return true;
   }
 }
@@ -110,6 +122,8 @@ export class WebVoice {
   private stream?: MediaStream;
   private stopped = true;
   private lastState: VoiceState = "closed";
+  /** 上一块落单的奇数字节，等下一块补齐一个 16 位样本。 */
+  private pendingBytes: Uint8Array = new Uint8Array(0);
 
   constructor(private readonly options: VoiceOptions) {}
 
@@ -120,6 +134,7 @@ export class WebVoice {
   async start(hash: string) {
     if (!this.stopped) return;
     this.stopped = false;
+    this.pendingBytes = new Uint8Array(0);
     this.emit("connecting");
 
     // 必须在点击手势里创建并恢复 AudioContext：否则自动播放策略会让它一直 suspended
@@ -174,7 +189,10 @@ export class WebVoice {
         return;
       }
       if (!this.stopped && this.player) {
-        this.player.port.postMessage(pcm16ToFloat32(new Uint8Array(event.data)));
+        // 消息可能在任意字节边界切开：只解完整的样本，奇数字节留到下一块
+        const { samples, pending } = feedPcm16(this.pendingBytes, new Uint8Array(event.data));
+        this.pendingBytes = pending;
+        if (samples.length) this.player.port.postMessage(samples);
       }
     };
     socket.onclose = () => {
@@ -185,6 +203,7 @@ export class WebVoice {
   stop() {
     if (this.stopped) return;
     this.stopped = true;
+    this.pendingBytes = new Uint8Array(0);
     try {
       this.socket?.close();
     } catch {
@@ -233,6 +252,8 @@ export class WebVoice {
       capture.port.onmessage = (event) => {
         const frame = event.data as Int16Array;
         if (this.stopped || this.socket?.readyState !== WebSocket.OPEN) return;
+        // 上行背压：积压超过约 64 KiB 就丢掉当前帧，和播放端丢旧帧一个思路
+        if (this.socket.bufferedAmount > SEND_BUFFER_LIMIT) return;
         const bytes = new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength);
         this.socket.send(bytes);
       };

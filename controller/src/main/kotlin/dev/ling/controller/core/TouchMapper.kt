@@ -45,7 +45,34 @@ object TouchMapper {
         val rect = displayRect(viewWidth, viewHeight, frameWidth, frameHeight) ?: return null
         if (viewX < rect.left || viewX > rect.left + rect.width) return null
         if (viewY < rect.top || viewY > rect.top + rect.height) return null
+        return map(rect, viewX, viewY, frameWidth, frameHeight)
+    }
 
+    /**
+     * MOVE/UP 专用：黑边上的坐标先夹到画面边界再换算。
+     * 手指划出画面后抬起时，UP 不能因为落在黑边上而丢失，否则远端一直按着。
+     */
+    fun toFrameClamped(
+        viewX: Float,
+        viewY: Float,
+        viewWidth: Float,
+        viewHeight: Float,
+        frameWidth: Int,
+        frameHeight: Int,
+    ): Pair<Int, Int>? {
+        val rect = displayRect(viewWidth, viewHeight, frameWidth, frameHeight) ?: return null
+        val x = viewX.coerceIn(rect.left, rect.left + rect.width)
+        val y = viewY.coerceIn(rect.top, rect.top + rect.height)
+        return map(rect, x, y, frameWidth, frameHeight)
+    }
+
+    private fun map(
+        rect: Rect,
+        viewX: Float,
+        viewY: Float,
+        frameWidth: Int,
+        frameHeight: Int,
+    ): Pair<Int, Int> {
         val fx = ((viewX - rect.left) / rect.width * frameWidth).toInt()
         val fy = ((viewY - rect.top) / rect.height * frameHeight).toInt()
         return fx.coerceIn(0, frameWidth - 1) to fy.coerceIn(0, frameHeight - 1)

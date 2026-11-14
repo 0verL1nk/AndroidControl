@@ -103,6 +103,8 @@ export class RemoteSession {
 
   private openVideo() {
     if (this.stopped) return;
+    // 重连后的流又从 68 字节头开始：不清解析器会把头当成包头发解析
+    this.resetStream();
     const socket = new WebSocket(this.endpoint());
     socket.binaryType = "arraybuffer";
     this.videoSocket = socket;
@@ -115,9 +117,9 @@ export class RemoteSession {
     socket.onmessage = (event) => {
       if (typeof event.data === "string") {
         if (event.data === "ERR") {
-          this.options.onState("error", "被协助的手机不在线（先在手机上开启协助）");
+          this.fail("被协助的手机不在线（先在手机上开启协助）");
         } else if (event.data === "TIMEOUT") {
-          this.options.onState("error", "被协助的手机没有及时响应");
+          this.fail("被协助的手机没有及时响应");
         }
         return;
       }
@@ -141,13 +143,28 @@ export class RemoteSession {
       window.setTimeout(() => this.sendControl(resetVideoMessage()), 200);
     };
     socket.onmessage = (event) => {
-      if (typeof event.data === "string" && event.data === "ERR") {
-        this.options.onState("error", "被协助的手机不在线");
+      if (typeof event.data !== "string") return;
+      if (event.data === "ERR") {
+        this.fail("被协助的手机不在线");
+      } else if (event.data === "TIMEOUT") {
+        this.fail("被协助的手机没有及时响应");
       }
     };
     socket.onclose = () => {
       if (!this.stopped) window.setTimeout(() => this.openControl(), 500);
     };
+  }
+
+  /**
+   * 中继明确拒绝（未加白/不在线/超时）时停下，不再自动重连：
+   * 继续重连既骚扰用户，也会消耗中继的失败预算。用户点重试时 connect() 会复位。
+   */
+  private fail(detail: string) {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.options.onState("error", detail);
+    this.videoSocket?.close();
+    this.controlSocket?.close();
   }
 
   private sendControl(data: ArrayBuffer | Uint8Array) {

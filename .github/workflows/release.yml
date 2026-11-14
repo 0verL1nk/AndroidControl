@@ -38,15 +38,48 @@ jobs:
           EOF
           chmod 600 .secrets/release.jks .secrets/keystore.properties
 
+      - name: 写入内置中继（只进 APK，不进仓库）
+        env:
+          RELAY_ADDRESS: ${{ secrets.RELAY_DEFAULT_ADDRESS }}
+          RELAY_FINGERPRINT: ${{ secrets.RELAY_TLS_FINGERPRINT }}
+        run: |
+          if [ -z "$RELAY_ADDRESS" ]; then
+            echo "缺少仓库 Secret RELAY_DEFAULT_ADDRESS，拒绝产出装好也用不了的发布包" >&2
+            exit 1
+          fi
+          echo "relay.defaultAddress=$RELAY_ADDRESS" > local.properties
+          echo "relay.tlsFingerprint=$RELAY_FINGERPRINT" >> local.properties
+
       - name: 构建
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleRelease --stacktrace
 
-      - name: 校验签名
+      - name: 校验签名与版本
+        env:
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk
+
+          # 不只看"签名有效"：必须是这把 release keystore 签的，否则老用户无法覆盖升级
+          normalize() { tr -d ':' | tr 'A-F' 'a-f' | tr -d '[:space:]'; }
+          EXPECTED=$(keytool -list -v -keystore .secrets/release.jks \
+            -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null \
+            | awk '/SHA256:/{print $2; exit}' | normalize)
+          ACTUAL=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk \
+            | awk -F': ' '/SHA-256 digest/{print $2; exit}' | normalize)
+          if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "签名证书与 keystore 不一致：expected=$EXPECTED actual=$ACTUAL" >&2
+            exit 1
+          fi
+
+          VERSION=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ "v$VERSION" != "${GITHUB_REF_NAME}" ]; then
+            echo "versionName=$VERSION 与 tag ${GITHUB_REF_NAME} 不一致" >&2
+            exit 1
+          fi
 
       - uses: softprops/action-gh-release@v2
         with:

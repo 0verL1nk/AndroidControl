@@ -78,7 +78,7 @@ data class SessionStats(
     val rttMs: Long = -1,
     val idleSeconds: Int = 0,
     val reconnecting: Int? = null,
-    val reconnectMax: Int = 60,
+    val reconnectMax: Int = 8,
     val failure: String? = null,
 )
 

@@ -122,7 +122,11 @@ class ControlLink(private val device: DeviceInfo) {
             }
 
             if (!running.get()) return
-            Thread.sleep(RECONNECT_DELAY_MS)
+            try {
+                Thread.sleep(RECONNECT_DELAY_MS)
+            } catch (_: InterruptedException) {
+                return
+            }
         }
     }
 
@@ -151,7 +155,11 @@ class ControlLink(private val device: DeviceInfo) {
      */
     private fun heartbeatLoop() {
         while (running.get()) {
-            Thread.sleep(HEARTBEAT_TICK_MS)
+            try {
+                Thread.sleep(HEARTBEAT_TICK_MS)
+            } catch (_: InterruptedException) {
+                return
+            }
             val period = heartbeatMs
             if (period <= 0) continue
             val target = channel ?: continue

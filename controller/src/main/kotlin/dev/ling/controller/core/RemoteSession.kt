@@ -2,6 +2,7 @@ package dev.ling.controller.core
 
 import android.util.Log
 import android.view.Surface
+import dev.ling.protocol.ControlMessageWriter
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -12,8 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - **视频流**由本类持有，解码循环阻塞在这条线程上，中断即整场会话中断；
  * - **控制流**交给 [ControlLink]，它自己重连，不牵连画面。
  *
- * 重连策略按验收标准（FR-012 / SC-006）：最多 15 次，且把次数报给界面——
- * 弱网时不能让画面装作没事。
+ * 重连策略按验收标准（FR-012 / SC-006）：最多 8 次、指数退避（1s→30s），
+ * 且把次数报给界面——弱网时不能让画面装作没事。
  */
 class RemoteSession(
     private val device: DeviceInfo,
@@ -35,6 +36,14 @@ class RemoteSession(
     private var videoSocket: Socket? = null
     private var decoder: VideoDecoder? = null
     private var control: ControlLink? = null
+    private var statsThread: Thread? = null
+
+    /** 本轮会话的统计循环开关；release 时置 false，旧统计线程自行退出。 */
+    @Volatile
+    private var statsRunning = false
+
+    /** 连续失败次数；连上后归零（runSession 在握手成功后重置）。 */
+    private var attempt = 0
 
     @Volatile
     private var frameWidth = 0
@@ -54,10 +63,15 @@ class RemoteSession(
 
     // ── 输入转发 ────────────────────────────────────────────────
 
-    /** 坐标来自控件，内部换算成帧坐标；落在黑边上则忽略。 */
+    /** 坐标来自控件，内部换算成帧坐标；DOWN 落在黑边上则忽略。 */
     fun sendTouch(action: Int, viewX: Float, viewY: Float, viewWidth: Float, viewHeight: Float) {
-        val (fx, fy) = TouchMapper.toFrame(viewX, viewY, viewWidth, viewHeight, frameWidth, frameHeight)
-            ?: return
+        // 只有 DOWN 要判断是否点在黑边上；MOVE/UP 一律夹到边界再发，
+        // 否则手指划出画面后抬起时 UP 会丢失，远端一直处于按下状态。
+        val (fx, fy) = if (action == ControlMessageWriter.ACTION_DOWN) {
+            TouchMapper.toFrame(viewX, viewY, viewWidth, viewHeight, frameWidth, frameHeight)
+        } else {
+            TouchMapper.toFrameClamped(viewX, viewY, viewWidth, viewHeight, frameWidth, frameHeight)
+        } ?: return
         control?.touch(action, PointerIdGenericFinger, fx, fy, frameWidth, frameHeight)
     }
 
@@ -75,7 +89,6 @@ class RemoteSession(
     // ── 连接与重连 ──────────────────────────────────────────────
 
     private fun connectLoop() {
-        var attempt = 0
         while (running.get()) {
             try {
                 runSession()
@@ -95,14 +108,33 @@ class RemoteSession(
                     return
                 }
                 listener.onReconnecting(attempt, MAX_ATTEMPTS)
-                Thread.sleep(RECONNECT_DELAY_MS)
+                try {
+                    Thread.sleep(reconnectDelayMs(attempt))
+                } catch (_: InterruptedException) {
+                    return
+                }
             }
         }
+    }
+
+    /**
+     * 指数退避：1s、2s、4s、8s、15s，之后固定 30s。
+     * 固定 500ms 的连续重试会把同一口令哈希快速打到中继的失败锁定阈值上。
+     */
+    private fun reconnectDelayMs(attempt: Int): Long = when (attempt) {
+        1 -> 1_000L
+        2 -> 2_000L
+        3 -> 4_000L
+        4 -> 8_000L
+        5 -> 15_000L
+        else -> 30_000L
     }
 
     /** 建立一次会话并阻塞到它结束。 */
     private fun runSession() {
         val video = Channels.open(device, Role.Video)
+        // 握手成功即视为"连上"：下次再断时重新从 1s 开始退避
+        attempt = 0
         videoSocket = video
         Log.i(TAG, "已连接 ${device.name}")
 
@@ -127,7 +159,11 @@ class RemoteSession(
             listener.onSizeChanged(w, h)
         }
 
-        Thread({ statsLoop(videoDecoder) }, "stats").apply { isDaemon = true }.start()
+        statsRunning = true
+        statsThread = Thread({ statsLoop(videoDecoder) }, "stats").apply {
+            isDaemon = true
+            start()
+        }
 
         // 解码循环阻塞在这条线程上；尺寸未知时先按 0 报一次，拿到会话包会立刻再报
         frameWidth = 0
@@ -136,6 +172,9 @@ class RemoteSession(
     }
 
     private fun releaseCurrentSession() {
+        statsRunning = false
+        runCatching { statsThread?.interrupt() }
+        statsThread = null
         runCatching { control?.stop() }
         runCatching { decoder?.stop() }
         runCatching { videoSocket?.close() }
@@ -149,8 +188,12 @@ class RemoteSession(
         var lastBytes = 0L
         var lastAt = System.currentTimeMillis()
         var lastFrameAt = System.currentTimeMillis()
-        while (running.get()) {
-            Thread.sleep(STATS_INTERVAL_MS)
+        while (running.get() && statsRunning) {
+            try {
+                Thread.sleep(STATS_INTERVAL_MS)
+            } catch (_: InterruptedException) {
+                return
+            }
             val now = System.currentTimeMillis()
             val elapsed = (now - lastAt).coerceAtLeast(1)
             val fps = (decoder.frameCount - lastFrames) * 1000.0 / elapsed
@@ -219,12 +262,11 @@ class RemoteSession(
         const val TAG = "RemoteSession"
 
         /**
-         * 重试次数。单次失败很快（中继不可达时 200ms 就返回），
-         * 60 次 ≈ 30 秒以上，足够覆盖"长辈端 App 重启/引擎重启"这种十几秒的空窗；
-         * 再长就没有意义了——真断网时应该让用户看到明确失败，而不是无限转圈。
+         * 重试次数。中继对同一口令哈希连续失败 10 次会锁 10 分钟，
+         * 所以这里宁可早点让用户看到失败，也不能靠高频重试硬顶。
+         * 指数退避后，8 次的总窗口约 1~1.5 分钟。
          */
-        const val MAX_ATTEMPTS = 60
-        const val RECONNECT_DELAY_MS = 500L
+        const val MAX_ATTEMPTS = 8
         const val STATS_INTERVAL_MS = 1_000L
         const val RTT_TIMEOUT_MS = 400
 
