@@ -30,6 +30,9 @@ class RelayClient(
     private val localVideoPort: Int,
     /** 非空表示走 TLS，且只接受 SHA-256 指纹匹配的证书（自签即可）。 */
     private val tlsPin: String? = null,
+    /** 设备码与机型：只用于中继管理面板识别设备，不参与鉴权。 */
+    private val deviceId: String = "",
+    private val deviceModel: String = "",
     private val onState: (String) -> Unit = {},
 ) {
 
@@ -96,7 +99,7 @@ class RelayClient(
             node.soTimeout = HANDSHAKE_TIMEOUT_MS
 
             val out = node.getOutputStream()
-            out.write("AGENT $tokenHash signaling\n".toByteArray())
+            out.write(signalingLine().toByteArray())
             out.flush()
             if (readLine(node.getInputStream()) != "OK") {
                 throw IllegalStateException("节点拒绝了信令连接")
@@ -238,6 +241,20 @@ class RelayClient(
             sb.append(b.toChar())
         }
         return sb.toString().trim()
+    }
+
+    /**
+     * `AGENT <哈希> signaling [设备码] [机型…]`。
+     * 机型可能含空格，所以永远放在最后；老中继会忽略多出来的字段。
+     */
+    private fun signalingLine(): String = buildString {
+        append("AGENT ").append(tokenHash).append(" signaling")
+        if (deviceId.isNotBlank()) {
+            append(' ').append(deviceId)
+            val model = deviceModel.replace('\n', ' ').replace('\r', ' ').trim()
+            if (model.isNotEmpty()) append(' ').append(model)
+        }
+        append('\n')
     }
 
     val tokenHash: String =

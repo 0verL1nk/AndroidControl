@@ -8,6 +8,7 @@ import dev.ling.agent.engine.IEngineService
 import dev.ling.agent.launcher.ServerLauncher
 import dev.ling.agent.net.AgentProxy
 import dev.ling.agent.net.EngineStreams
+import dev.ling.agent.net.DeviceIdentity
 import dev.ling.agent.net.RelayClient
 import dev.ling.agent.trust.PairingStore
 import dev.ling.agent.trust.SensitiveApps
@@ -137,6 +138,8 @@ class AgentSession(
                 localControlPort = controlPort,
                 localVideoPort = videoPort,
                 tlsPin = store.relayFingerprint(),
+                deviceId = DeviceIdentity.id(context),
+                deviceModel = DeviceIdentity.model(),
                 onState = { message ->
                     state(message)
                     val connected = message.contains("对方已连接")

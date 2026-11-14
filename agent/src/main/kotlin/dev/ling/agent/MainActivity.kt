@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
                     videoProfile = dev.ling.agent.trust.PairingStore(this).videoProfile(),
                     onVideoProfile = { profile -> AgentService.setVideoProfile(this, profile) },
                     relayLabel = label,
+                    deviceLabel = dev.ling.agent.net.DeviceIdentity.label(this),
                     onSaveRelay = { host, port, pin ->
                         store.setRelay(host, port)
                         store.setRelayFingerprint(pin)

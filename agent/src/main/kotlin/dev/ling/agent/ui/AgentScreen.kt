@@ -87,6 +87,8 @@ fun AgentScreen(
     onVideoProfile: (VideoProfile) -> Unit = {},
     /** 形如 `relay.example.com:27443（TLS）`；null 表示只用局域网。 */
     relayLabel: String? = null,
+    /** 机型 · 设备码：给管理面板对照用。 */
+    deviceLabel: String? = null,
     onSaveRelay: (host: String, port: Int, pin: String?) -> Unit = { _, _, _ -> },
 ) {
     var tapCount by remember { mutableIntStateOf(0) }
@@ -190,6 +192,7 @@ fun AgentScreen(
             state = state,
             videoProfile = videoProfile,
             relayLabel = relayLabel,
+            deviceLabel = deviceLabel,
             onSaveRelay = onSaveRelay,
             onRotateToken = onRotateToken,
             onVideoProfile = onVideoProfile,
@@ -327,6 +330,7 @@ private fun AdvancedDialog(
     state: AgentUiState,
     videoProfile: VideoProfile,
     relayLabel: String?,
+    deviceLabel: String?,
     onSaveRelay: (host: String, port: Int, pin: String?) -> Unit,
     onRotateToken: () -> Unit,
     onVideoProfile: (VideoProfile) -> Unit,
@@ -346,6 +350,9 @@ private fun AdvancedDialog(
                 Text("控制端口：${info?.controlPort ?: "—"} / 视频：${info?.videoPort ?: "—"}", fontSize = 15.sp)
                 Text("会话号：${info?.scid ?: "—"}", fontSize = 15.sp)
                 Text("中继：${relayLabel ?: "未配置（仅局域网）"}", fontSize = 15.sp)
+                if (!deviceLabel.isNullOrBlank()) {
+                    Text("本机：$deviceLabel", fontSize = 15.sp)
+                }
 
                 Spacer(Modifier.height(10.dp))
                 Text("画质（切换会短暂重连）", fontSize = 14.sp)
