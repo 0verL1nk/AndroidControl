@@ -65,3 +65,10 @@
 - [x] 10.4 网页：重连重置解析器、payload 上限、播放重采样、PCM 对齐、上行背压、离开会话停麦
 - [x] 10.5 Android：重连指数退避、统计线程回收、设备键 (host,token)、指纹不被静默清除、触摸 UP、默认端口 27443
 - [x] 10.6 指纹固定进入 CI：keytool 自建服务端，正确指纹通过、错误指纹拒绝
+
+## 11. 仓库拆分与整理
+
+- [x] 11.1 服务端源码迁往私有仓库 `AndroidControl-relay`，public 仓库以 submodule 引用
+- [x] 11.2 公开仓库历史移除服务端源码（强制重写；全量克隆核对 0 个 relay blob）
+- [x] 11.3 目录整理：`specs/` → `docs/specs/`，早期设计归档到 `docs/archive/`，新增 `docs/README.md` 索引
+- [x] 11.4 公开 CI 改为 Android + 网页检查；服务端测试移到私有仓库（私有 CI 受 GitHub Actions 账单限制，需额度后才会运行）
