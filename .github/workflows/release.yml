@@ -69,7 +69,7 @@ jobs:
             -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null \
             | awk '/SHA256:/{print $2; exit}' | normalize)
           ACTUAL=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk \
-            | awk -F': ' '/SHA-256 digest/{print $2; exit}' | normalize)
+            | awk -F': ' '/SHA-256 digest/{print $NF; exit}' | normalize)
           if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
             echo "签名证书与 keystore 不一致：expected=$EXPECTED actual=$ACTUAL" >&2
             exit 1
