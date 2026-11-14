@@ -47,7 +47,7 @@
 - 识别出控制端可直接 fork 的上游项目（ScrcpyForAndroid，Apache-2.0）
 - 盘点现有服务器，选定新加坡节点并建成 WireGuard 隧道（实测 32ms 到国内、766Mbps）
 
-**产出**：`specs/001-*/research.md`、`docs/DECISIONS.md`
+**产出**：`docs/specs/001-*/research.md`、`docs/DECISIONS.md`
 
 ### M1 — 跨公网闭环 ✅ 已完成（2026-10-19）
 

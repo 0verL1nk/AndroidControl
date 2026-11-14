@@ -112,8 +112,10 @@ app/          唯一安装包（首页 = 自己的配对码 + 协助别人）
 agent/        被协助逻辑（库）：Shizuku 启动引擎、中继连接、语音/播报
 controller/   控制端逻辑（库，fork 自 Miuzarte/ScrcpyForAndroid）
 protocol/     两端共用的协议编解码与 TLS 指纹校验
-relay/        配对中继（Rust，明文 + TLS 双监听）
+relay/        配对中继（私有 submodule；公开克隆时为空）
 web/          浏览器控制端（Next.js + WebCodecs）
+docs/         路线图、决策、运维（索引见 docs/README.md）
+openspec/     当前变更流程（提案 / 设计 / 任务）
 vendor/       固定版本的 scrcpy-server
 tools/        节点搭建、数据检查等脚本
 specs/        需求、方案、协议契约、任务清单、验证手册
@@ -140,3 +142,9 @@ docs/         路线图、决策记录、运维手册
 
 另有 [RikkaApps/Shizuku](https://github.com/RikkaApps/Shizuku) 提供免 root 的 shell
 能力（Apache-2.0）。
+
+## 服务端源码
+
+中继服务端（`relay/`）位于私有仓库 `AndroidControl-relay`，在本仓库里以 submodule 引用：
+无权限的公开克隆会得到空目录，公开 CI 也不构建它。App、协议与网页端仍然开源。
+自托管者可联系维护者获取预编译的中继二进制（私有仓库的 Release）。

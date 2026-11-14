@@ -8,7 +8,7 @@ description: "Task list for 远程接管 Android 手机（跨公网 M1）"
 > 实际完成情况以 `docs/ROADMAP.md` 为准：M1–M4 完成，M5 的语音与多设备完成，
 > iOS/浏览器控制端为可选项、未开始。清单保留作为设计与验收路径的参考。
 
-**Input**: Design documents from `specs/001-remote-android-control/`
+**Input**: Design documents from `docs/specs/001-remote-android-control/`
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/agent-protocol.md, quickstart.md
 

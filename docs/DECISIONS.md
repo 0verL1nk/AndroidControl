@@ -341,7 +341,7 @@ adbd）；root（刷机风险）。
 **决策**：以 GitHub Spec Kit 组织规格（constitution → specify → plan → tasks）。
 
 **理由**：用户指定；产物结构完整、可追踪，适合跨里程碑的长期项目。
-立项期的调研仍保留 superpowers 流程的产出（`docs/superpowers/specs/`）。
+立项期的调研仍保留 superpowers 流程的产出（`docs/archive/superpowers/specs/`）。
 
 ---
 
@@ -390,7 +390,7 @@ adbd）；root（刷机风险）。
 **决策**：设计以"控制端在蜂窝网络、长辈端在家用 Wi-Fi"为前提；局域网只是它的退化情况。
 
 **理由**：用户澄清真实使用场景不在同一局域网。此决策推翻了早期"局域网自研 agent +
-代理"的设计（保留在 `docs/superpowers/specs/`）。
+代理"的设计（保留在 `docs/archive/superpowers/specs/`）。
 
 ---
 

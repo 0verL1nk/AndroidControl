@@ -1,7 +1,7 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/001-remote-android-control/plan.md`
+`docs/specs/001-remote-android-control/plan.md`
 <!-- SPECKIT END -->
 
 # 项目约定（给 AI 协作者）
@@ -16,10 +16,10 @@ shell commands, and other important information, read the current plan:
 | 文档 | 用途 |
 |---|---|
 | `.specify/memory/constitution.md` | 项目原则，冲突时以此为准 |
-| `specs/001-remote-android-control/spec.md` | 需求（做什么） |
-| `specs/001-remote-android-control/plan.md` | 技术方案（怎么做） |
-| `specs/001-remote-android-control/tasks.md` | 任务清单（改代码看这个） |
-| `specs/001-remote-android-control/research.md` | 调研证据与实测数据 |
+| `docs/specs/001-remote-android-control/spec.md` | 需求（做什么） |
+| `docs/specs/001-remote-android-control/plan.md` | 技术方案（怎么做） |
+| `docs/specs/001-remote-android-control/tasks.md` | 任务清单（改代码看这个） |
+| `docs/specs/001-remote-android-control/research.md` | 调研证据与实测数据 |
 | `docs/DECISIONS.md` | 决策记录，改架构前先看有没有定过 |
 | `docs/ROADMAP.md` | 里程碑与当前进度 |
 

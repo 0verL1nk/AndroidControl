@@ -2,7 +2,7 @@
 
 **Branch**: `001-remote-android-control` | **Date**: 2026-10-18 | **Spec**: [spec.md](./spec.md)
 
-**Input**: Feature specification from `specs/001-remote-android-control/spec.md`
+**Input**: Feature specification from `docs/specs/001-remote-android-control/spec.md`
 
 ## Summary
 
@@ -69,7 +69,7 @@ Complexity Tracking。
 
 ```text
 AndroidControl/
-├── specs/001-remote-android-control/     # Spec Kit 产物（本目录）
+├── docs/specs/001-remote-android-control/     # Spec Kit 产物（本目录）
 ├── docs/
 │   ├── ROADMAP.md                        # 全路线 M0–M4
 │   ├── DECISIONS.md                      # ADR 决策记录

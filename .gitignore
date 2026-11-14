@@ -23,3 +23,8 @@ Thumbs.db
 # Rust 构建产物
 relay/target/
 target/
+
+# 本地工具状态
+.claude/worktrees/
+.claude/settings.local.json
+.local/

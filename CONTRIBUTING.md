@@ -28,11 +28,11 @@ constitution → specify → plan → tasks → implement
 ```
 
 - 原则与约束：`.specify/memory/constitution.md`
-- 需求：`specs/001-remote-android-control/spec.md`
-- 方案：`specs/001-remote-android-control/plan.md`
-- 任务：`specs/001-remote-android-control/tasks.md`
-- 协议契约：`specs/001-remote-android-control/contracts/`
-- 验证手册：`specs/001-remote-android-control/quickstart.md`
+- 需求：`docs/specs/001-remote-android-control/spec.md`
+- 方案：`docs/specs/001-remote-android-control/plan.md`
+- 任务：`docs/specs/001-remote-android-control/tasks.md`
+- 协议契约：`docs/specs/001-remote-android-control/contracts/`
+- 验证手册：`docs/specs/001-remote-android-control/quickstart.md`
 
 **改代码前先看 `tasks.md`**：每个任务都有编号与文件路径。大改动请先提 issue 讨论，
 不要直接改架构。

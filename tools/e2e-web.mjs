@@ -40,7 +40,9 @@ function relayBinary() {
     );
     process.exit(2);
   }
-  // 源码比二进制新时直接失败：否则 E2E 通过的是一个过期的中继
+  // 源码比二进制新时直接失败：否则 E2E 通过的是一个过期的中继。
+  // relay/ 是私有 submodule：公开克隆里没有源码时跳过这项检查。
+  if (!existsSync(join(ROOT, "relay", "src"))) return found;
   const binaryTime = statSync(found).mtimeMs;
   const sources = [join(ROOT, "relay", "Cargo.toml")];
   const walk = (dir) => {
