@@ -100,8 +100,8 @@ fun ControlScreen(
     var confirmDisconnect by remember { mutableStateOf(false) }
     var textDialog by remember { mutableStateOf(false) }
     var voiceOn by remember { mutableStateOf(false) }
-    val voice = remember { VoiceLink(device) }
     val context = LocalContext.current
+    val voice = remember { VoiceLink(device, context) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),

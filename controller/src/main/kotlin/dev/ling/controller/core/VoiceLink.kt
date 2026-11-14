@@ -1,5 +1,6 @@
 package dev.ling.controller.core
 
+import android.content.Context
 import android.util.Log
 import dev.ling.audio.VoiceSession
 import java.net.Socket
@@ -11,7 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 语音只有"通"和"不通"两种状态——中途断了必须让界面把按钮复位，
  * 否则用户会对着一个已经没声音的麦克风说话。
  */
-class VoiceLink(private val device: DeviceInfo) {
+class VoiceLink(private val device: DeviceInfo, private val context: Context) {
 
     /** connected=true 表示双向已经通了；false 时 reason 说明原因（可为 null）。 */
     var onState: ((connected: Boolean, reason: String?) -> Unit)? = null
@@ -38,7 +39,7 @@ class VoiceLink(private val device: DeviceInfo) {
         try {
             val opened = Channels.open(device, Role.Audio)
             socket = opened
-            VoiceSession(opened).run {
+            VoiceSession(opened, context, speakerphone = false).run {
                 connectedAt = System.currentTimeMillis()
                 onState?.invoke(true, null)
             }

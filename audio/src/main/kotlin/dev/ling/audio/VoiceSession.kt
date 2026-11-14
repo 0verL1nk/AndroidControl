@@ -1,7 +1,10 @@
 package dev.ling.audio
 
+import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.os.Build
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
@@ -25,10 +28,22 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - 读麦克风用阻塞模式，保证每次正好一帧，对端的定长读取才不会错位；
  * - 任一方向结束就关闭整条通道——语音"要么通、要么不通"，半死状态最迷惑人。
  */
-class VoiceSession(private val socket: Socket) {
+class VoiceSession(
+    private val socket: Socket,
+    private val context: Context? = null,
+    /**
+     * true：把播放路由到扬声器（长辈端——手机放在桌上，必须外放）；
+     * false：保持系统默认（控制端拿在耳边时用听筒更自然）。
+     */
+    private val speakerphone: Boolean = false,
+) {
 
     private val running = AtomicBoolean(false)
     private var echoCanceler: AcousticEchoCanceler? = null
+    private var audioManager: AudioManager? = null
+    private var savedVolume = -1
+    private var savedMode = AudioManager.MODE_INVALID
+    private var savedSpeakerOn = false
 
     /**
      * 阻塞到语音结束（断开或出错）。
@@ -42,6 +57,8 @@ class VoiceSession(private val socket: Socket) {
         var recorder: AudioRecord? = null
         var player: AudioTrack? = null
         try {
+            // 必须先进入通话模式再创建 AudioRecord：AEC 在普通模式下启用会把麦克风压成静音
+            if (context != null) configureAudio(context)
             recorder = openMicrophone()
             player = openSpeaker()
             Log.i(TAG, "语音通道已就绪（双向 PCM）")
@@ -65,6 +82,7 @@ class VoiceSession(private val socket: Socket) {
             runCatching { player?.stop() }
             runCatching { player?.release() }
             runCatching { echoCanceler?.release() }
+            restoreAudio()
             runCatching { socket.close() }
         }
     }
@@ -76,7 +94,7 @@ class VoiceSession(private val socket: Socket) {
             AudioFormat.ENCODING_PCM_16BIT,
         )
         val recorder = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             VoiceAudio.SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
@@ -85,7 +103,7 @@ class VoiceSession(private val socket: Socket) {
         check(recorder.state == AudioRecord.STATE_INITIALIZED) {
             "麦克风不可用（可能没有录音权限）"
         }
-        if (AcousticEchoCanceler.isAvailable()) {
+        if (!DEBUG_DISABLE_AEC && AcousticEchoCanceler.isAvailable()) {
             echoCanceler = AcousticEchoCanceler.create(recorder.audioSessionId)
                 ?.apply { enabled = true }
         }
@@ -120,9 +138,62 @@ class VoiceSession(private val socket: Socket) {
         return player
     }
 
+    /**
+     * 长辈端外放：通话音源默认走听筒，且通话音量经常停在 1/15。
+     * 这里临时切到扬声器并把音量提到至少一半，会话结束时全部还原。
+     */
+    private fun configureAudio(context: Context) {
+        val manager = context.getSystemService(AudioManager::class.java) ?: return
+        audioManager = manager
+        savedMode = manager.mode
+        runCatching { manager.mode = AudioManager.MODE_IN_COMMUNICATION }
+        if (speakerphone) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val speaker = manager.availableCommunicationDevices
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                if (speaker != null) runCatching { manager.setCommunicationDevice(speaker) }
+            } else {
+                @Suppress("DEPRECATION")
+                savedSpeakerOn = manager.isSpeakerphoneOn
+                @Suppress("DEPRECATION")
+                runCatching { manager.isSpeakerphoneOn = true }
+            }
+        }
+        val max = manager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+        val current = manager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+        if (max > 0 && current < (max + 1) / 2) {
+            savedVolume = current
+            runCatching {
+                manager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (max + 1) / 2, 0)
+            }
+        }
+    }
+
+    private fun restoreAudio() {
+        val manager = audioManager ?: return
+        if (savedVolume >= 0) {
+            runCatching {
+                manager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, savedVolume, 0)
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching { manager.clearCommunicationDevice() }
+        } else {
+            @Suppress("DEPRECATION")
+            runCatching { manager.isSpeakerphoneOn = savedSpeakerOn }
+        }
+        if (savedMode != AudioManager.MODE_INVALID) {
+            runCatching { manager.mode = savedMode }
+        }
+        audioManager = null
+        savedVolume = -1
+    }
+
     private fun captureLoop(recorder: AudioRecord, out: OutputStream) {
         val frame = ByteArray(VoiceAudio.FRAME_BYTES)
         var announced = false
+        var silentFrames = 0
+        var checkedFrames = 0
         try {
             while (running.get()) {
                 // 阻塞读满一帧；短帧会让对端的定长读取错位
@@ -132,6 +203,33 @@ class VoiceSession(private val socket: Socket) {
                 if (!announced) {
                     announced = true
                     Log.i(TAG, "麦克风上行已有数据")
+                }
+                // 有些机型（实测 Redmi K60 Ultra / HyperOS 3）启用 AcousticEchoCanceler
+                // 后输出被压到 ±5 LSB（约 -76 dBFS）。会话前 5 秒里连续 20 帧（约 0.4s）
+                // 峰值低于 50（约 -56 dBFS）就自动关掉 AEC，保住可用性。
+                if (echoCanceler != null && checkedFrames < 250) {
+                    checkedFrames++
+                    var peak = 0
+                    var index = 0
+                    while (index + 1 < frame.size) {
+                        val low = frame[index].toInt() and 0xFF
+                        val high = frame[index + 1].toInt() shl 8
+                        val value = low or high
+                        val magnitude = if (value >= 0x8000) 0x10000 - value else value
+                        if (magnitude > peak) peak = magnitude
+                        index += 2
+                    }
+                    if (peak < 50) {
+                        silentFrames++
+                        if (silentFrames >= 20) {
+                            Log.w(TAG, "回声消除把麦克风压到静音，已自动关闭 AEC")
+                            runCatching { echoCanceler?.enabled = false }
+                            runCatching { echoCanceler?.release() }
+                            echoCanceler = null
+                        }
+                    } else {
+                        silentFrames = 0
+                    }
                 }
                 out.write(frame)
                 out.flush()
@@ -165,5 +263,11 @@ class VoiceSession(private val socket: Socket) {
 
     private companion object {
         const val TAG = "VoiceSession"
+        /**
+         * 诊断开关：某些机型（实测 Redmi K60 Ultra / HyperOS 3）用
+         * VOICE_COMMUNICATION 音源时麦克风只返回全零，改用 VOICE_RECOGNITION 后正常；
+         * 保留开关方便以后排查同类问题。
+         */
+        const val DEBUG_DISABLE_AEC = false
     }
 }

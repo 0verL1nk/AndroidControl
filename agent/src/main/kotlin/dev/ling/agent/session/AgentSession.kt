@@ -108,7 +108,7 @@ class AgentSession(
 
         // 口令持久化：控制端一次绑定后即可"打开就连"，不需要每次输入
         val token = PairingStore(context).token()
-        val p = AgentProxy(engineStreams, token, deviceName = agentDisplayName())
+        val p = AgentProxy(engineStreams, token, deviceName = agentDisplayName(), context = context)
         proxy = p
         // 控制端接入 / 断开 → 长辈端状态随之切换（"正在被协助"必须真实可见）
         p.onClientChanged = { connected ->

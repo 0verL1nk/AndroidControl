@@ -21,6 +21,8 @@ class AgentProxy(
     private val token: String,
     /** 设备展示名，用于控制端"自动发现"时列出可连设备。 */
     private val deviceName: String = android.os.Build.MODEL ?: "Android 设备",
+    /** 语音外放需要 AudioManager：长辈端用扬声器，不能用听筒。 */
+    private val context: android.content.Context? = null,
 ) {
 
     /** 控制端接入/断开回调，用来驱动长辈端"正在被协助"的可见状态。 */
@@ -141,7 +143,7 @@ class AgentProxy(
                                 Log.i(TAG, "控制连接结束")
                             }
                         }
-                        VERB_AUDIO -> runCatching { VoiceSession(s).run() }
+                        VERB_AUDIO -> runCatching { VoiceSession(s, context, speakerphone = true).run() }
                             .onFailure { Log.w(TAG, "语音通道异常：${it.message}") }
                         else -> Unit
                     }
